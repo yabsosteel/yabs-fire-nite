@@ -1,8 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import Constants from "expo-constants";
-import * as Device from "expo-device";
-import * as Notifications from "expo-notifications";
 import { useEffect, useState } from "react";
 import {
   Alert,
@@ -13,16 +10,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { supabase } from "./supabase";
-
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+import { supabase } from "../../lib/supabase";
 
 export default function HomeScreen() {
   const [event, setEvent] = useState<any>(null);
@@ -61,7 +49,6 @@ export default function HomeScreen() {
 
   const [announcementMessage, setAnnouncementMessage] = useState("");
   const [reminderRecipients, setReminderRecipients] = useState<any[]>([]);
-  const [pushStatus, setPushStatus] = useState("");
 
   const [newGuestFirstName, setNewGuestFirstName] = useState("");
   const [newGuestLastName, setNewGuestLastName] = useState("");
@@ -206,170 +193,15 @@ export default function HomeScreen() {
   }
 
   async function registerForPushNotifications() {
-  try {
-    if (!Device.isDevice) {
-      alert("Push notifications require a physical device.");
-      return;
-    }
-
-    const existingPermission: any = await Notifications.getPermissionsAsync();
-
-    let finalStatus = existingPermission?.status;
-
-    if (finalStatus !== "granted") {
-      const requestedPermission: any =
-        await Notifications.requestPermissionsAsync();
-
-      finalStatus = requestedPermission?.status;
-    }
-
-    if (finalStatus !== "granted") {
-      alert("Notification permission was not granted.");
-      return;
-    }
-
-    const projectId =
-      Constants.expoConfig?.extra?.eas?.projectId ??
-      Constants.easConfig?.projectId;
-
-    if (!projectId) {
-      alert("Missing Expo EAS project ID.");
-      return;
-    }
-
-    const tokenData = await Notifications.getExpoPushTokenAsync({
-      projectId,
-    });
-
-    const token = tokenData.data;
-
-    const { error } = await supabase.from("push_tokens").insert({
-      first_name: savedFirstName,
-      last_name: savedLastName,
-      name: `${savedFirstName} ${savedLastName}`,
-      expo_push_token: token,
-    });
-
-    if (error) {
-      alert(`Supabase error: ${error.message}`);
-      return;
-    }
-
-    alert(`Notifications enabled 🔥\n${token}`);
-  } catch (error: any) {
-    alert(`Push registration error: ${error?.message ?? JSON.stringify(error)}`);
-    console.log("Push registration error:", error);
-  }
-}
-  async function getPushTokensForPeople(people: any[]) {
-    const peopleKeys = new Set(people.map((person: any) => getPersonKey(person)));
-
-    const { data, error } = await supabase
-      .from("push_tokens")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      alert(error.message);
-      return [];
-    }
-
-    const seenTokens = new Set<string>();
-
-    return (data ?? [])
-      .filter((row: any) => peopleKeys.has(getPersonKey(row)))
-      .filter((row: any) => {
-        if (seenTokens.has(row.expo_push_token)) return false;
-        seenTokens.add(row.expo_push_token);
-        return true;
-      })
-      .map((row: any) => row.expo_push_token);
-  }
-
-  async function sendExpoPushNotifications(tokens: string[], title: string, body: string) {
-    const messages = tokens.map((token) => ({
-      to: token,
-      sound: "default",
-      title,
-      body,
-    }));
-
-    const response = await fetch("https://exp.host/--/api/v2/push/send", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Accept-Encoding": "gzip, deflate",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(messages),
-    });
-
-    if (!response.ok) {
-      alert("Push send failed. Please try again.");
-      return false;
-    }
-
-    return true;
+    alert("Push notifications are temporarily disabled while testing in Expo Go.");
   }
 
   async function sendReminderPush(reminderType: "tomorrow" | "two_hour") {
-    if (!isHost || !event?.id) return;
-
-    const reminderList = dedupePeople(
-      reminderRecipients.filter((person: any) => person.reminder_type === reminderType)
-    );
-
-    if (reminderList.length === 0) {
-      alert("Create the reminder list first.");
-      return;
-    }
-
-    const tokens = await getPushTokensForPeople(reminderList);
-
-    if (tokens.length === 0) {
-      alert("No push tokens found for this reminder list yet. Guests need to enable notifications on their devices.");
-      return;
-    }
-
-    const title = reminderType === "tomorrow" ? "Fire Reminder 🔥" : "Fire Soon 🔥";
-    const body =
-      reminderType === "tomorrow"
-        ? `Reminder: Yabs Fire Nite is ${formatDisplayDate(event.event_date)} at ${event.event_time}.`
-        : `Reminder: Yabs Fire Nite is coming up at ${event.event_time}.`;
-
-    const success = await sendExpoPushNotifications(tokens, title, body);
-
-    if (success) {
-      alert(`Push reminder sent to ${tokens.length} device(s).`);
-    }
+    alert("Push reminders are temporarily disabled while testing in Expo Go.");
   }
 
   async function sendAnnouncementPush() {
-    if (!isHost || !announcement?.id) return;
-
-    const recipients = dedupePeople(announcementRecipients);
-
-    if (recipients.length === 0) {
-      alert("No announcement recipients found.");
-      return;
-    }
-
-    const tokens = await getPushTokensForPeople(recipients);
-
-    if (tokens.length === 0) {
-      alert("No push tokens found for this announcement list yet. Guests need to enable notifications on their devices.");
-      return;
-    }
-
-    const success = await sendExpoPushNotifications(
-      tokens,
-      "Fire Announcement 🔥",
-      announcement.message
-    );
-
-    if (success) {
-      alert(`Announcement push sent to ${tokens.length} device(s).`);
-    }
+    alert("Announcement push is temporarily disabled while testing in Expo Go.");
   }
 
   async function loadReminderRecipients(eventId: string) {
@@ -849,7 +681,7 @@ export default function HomeScreen() {
       return;
     }
 
-    if (yesRsvps.length > 0) {
+    if (yesRsvps.length > 0 && event?.id) {
       const recipientsToInsert = yesRsvps.map((person: any) => ({
         announcement_id: newAnnouncement.id,
         event_id: event.id,
@@ -1609,16 +1441,10 @@ export default function HomeScreen() {
               }}
             >
               <Text style={{ color: "#fff", fontWeight: "700" }}>
-                Enable Notifications
+                Enable Notifications Disabled
               </Text>
             </Pressable>
           )}
-
-          {pushStatus ? (
-            <Text style={{ color: "#22c55e", marginTop: 8, textAlign: "center" }}>
-              {pushStatus}
-            </Text>
-          ) : null}
 
           <Pressable
             onPress={loadHistory}
@@ -1769,7 +1595,7 @@ export default function HomeScreen() {
                   )}
 
                   <TextInput
-                    placeholder="Message (optional)"
+                    placeholder="Message optional"
                     placeholderTextColor="#888"
                     value={newEventMessage}
                     onChangeText={setNewEventMessage}
@@ -1921,7 +1747,7 @@ export default function HomeScreen() {
                         }}
                       >
                         <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                          Send Announcement Push
+                          Send Announcement Push Disabled
                         </Text>
                       </Pressable>
                     </>
@@ -1984,7 +1810,7 @@ export default function HomeScreen() {
                     }}
                   >
                     <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                      Send Tomorrow Push Reminder
+                      Send Tomorrow Push Reminder Disabled
                     </Text>
                   </Pressable>
 
@@ -1999,7 +1825,7 @@ export default function HomeScreen() {
                     }}
                   >
                     <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                      Send 2 Hour Push Reminder
+                      Send 2 Hour Push Reminder Disabled
                     </Text>
                   </Pressable>
 
