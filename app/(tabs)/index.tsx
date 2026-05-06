@@ -2139,3 +2139,6 @@ export default function HomeScreen() {
     </ScrollView>
   );
 }
+<Text style={{ color: "#555", marginTop: 20, fontSize: 12 }}>
+  Version: Expo Go Stable 1.0
+</Text>
