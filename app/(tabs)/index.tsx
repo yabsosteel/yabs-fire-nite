@@ -1,4 +1,3 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useEffect, useState } from "react";
 import {
@@ -377,8 +376,8 @@ export default function HomeScreen() {
   }
 
   async function loadName() {
-    const storedFirstName = await AsyncStorage.getItem("first_name");
-    const storedLastName = await AsyncStorage.getItem("last_name");
+    //const storedFirstName = await AsyncStorage.getItem("first_name");
+    //const storedLastName = await AsyncStorage.getItem("last_name");
 
     if (storedFirstName && storedLastName) {
       setSavedFirstName(storedFirstName);
@@ -408,8 +407,8 @@ export default function HomeScreen() {
       return;
     }
 
-    await AsyncStorage.setItem("first_name", firstName.trim());
-    await AsyncStorage.setItem("last_name", lastName.trim());
+    //await AsyncStorage.setItem("first_name", firstName.trim());
+    //await AsyncStorage.setItem("last_name", lastName.trim());
 
     setSavedFirstName(firstName.trim());
     setSavedLastName(lastName.trim());
@@ -418,8 +417,8 @@ export default function HomeScreen() {
   }
 
   async function resetName() {
-    await AsyncStorage.removeItem("first_name");
-    await AsyncStorage.removeItem("last_name");
+    //await AsyncStorage.removeItem("first_name");
+    //await AsyncStorage.removeItem("last_name");
 
     setSavedFirstName(null);
     setSavedLastName(null);
