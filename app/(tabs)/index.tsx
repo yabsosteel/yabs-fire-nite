@@ -1399,22 +1399,38 @@ const notRespondedCount = notRespondedList.length;
     )}
   </View>
 )}
-<Text style={{ color: "#facc15", fontWeight: "700", marginTop: 12 }}>
-  Hasn’t Responded
-</Text>
+<View style={{ marginTop: 12, alignItems: "center" }}>
+  <Text
+    style={{
+      color: "#facc15",
+      fontWeight: "700",
+      textAlign: "center",
+    }}
+  >
+    Hasn’t Responded
+  </Text>
 
-{notRespondedList.length === 0 ? (
-  <Text style={{ color: "#b3b3ba" }}>Everyone has responded.</Text>
-) : (
-  notRespondedList.map((person: any) => (
-    <Text
-  key={person.id}
-  style={{ color: "#b3b3ba", textAlign: "left", alignSelf: "flex-start" }}
->
-  • {getDisplayName(person)}
-</Text>
-  ))
-)}
+  <View style={{ marginTop: 4, alignSelf: "flex-start" }}>
+    {notRespondedList.length === 0 ? (
+      <Text style={{ color: "#b3b3ba" }}>
+        Everyone has responded.
+      </Text>
+    ) : (
+      notRespondedList.map((person: any) => (
+        <Text
+          key={person.id}
+          style={{
+            color: "#b3b3ba",
+            marginTop: 4,
+          }}
+        >
+          • {getDisplayName(person)}
+        </Text>
+      ))
+    )}
+  </View>
+</View>
+
       {!savedFirstName || !savedLastName ? (
         <>
           <TextInput
