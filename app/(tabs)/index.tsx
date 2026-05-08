@@ -74,6 +74,11 @@ export default function HomeScreen() {
 
   const goingCount = currentGoingList.length;
 
+const notGoingList = dedupePeople(
+  event?.rsvps?.filter((r: any) => r.response_status === "not_going") || []
+);
+
+const notGoingCount = notGoingList.length;
   const filteredHistory =
     historyFilter === "all"
       ? history
@@ -1343,8 +1348,16 @@ export default function HomeScreen() {
       {event && (
         <View style={{ marginTop: 15 }}>
           <Text style={{ color: "#fff", fontWeight: "700", marginBottom: 5 }}>
-            Who’s Coming: {goingCount}
-          </Text>
+  RSVP Summary
+</Text>
+
+<Text style={{ color: "#22c55e" }}>
+  Yes: {goingCount}
+</Text>
+
+<Text style={{ color: "#ef4444", marginBottom: 8 }}>
+  No: {notGoingCount}
+</Text>
 
           {currentGoingList.map((r: any) => (
             <Text key={r.id} style={{ color: "#b3b3ba" }}>
