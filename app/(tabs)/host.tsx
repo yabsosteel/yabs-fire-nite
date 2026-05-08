@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   ScrollView,
   Text,
@@ -14,9 +14,15 @@ export default function HostScreen() {
   const [newEventDate, setNewEventDate] = useState("");
   const [newEventTime, setNewEventTime] = useState("");
   const [newEventMessage, setNewEventMessage] = useState("");
+  const [currentEvent, setCurrentEvent] = useState<any>(null);
+  const [isEditing, setIsEditing] = useState(false);
 
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
+
+  useEffect(() => {
+    loadCurrentEvent();
+  }, []);
 
   function formatDateForDatabase(date: Date) {
     return date.toISOString().split("T")[0];
@@ -24,6 +30,23 @@ export default function HostScreen() {
 
   function formatTimeForDatabase(date: Date) {
     return date.toTimeString().slice(0, 5);
+  }
+
+  async function loadCurrentEvent() {
+    const today = new Date().toISOString().split("T")[0];
+
+    const { data, error } = await supabase
+      .from("events")
+      .select("*")
+      .eq("status", "published")
+      .gte("event_date", today)
+      .order("event_date", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (!error && data) {
+      setCurrentEvent(data);
+    }
   }
 
   async function createNewEvent() {
@@ -46,7 +69,50 @@ export default function HostScreen() {
     }
 
     alert("Fire created 🔥");
+    setNewEventDate("");
+    setNewEventTime("");
+    setNewEventMessage("");
+    loadCurrentEvent();
+  }
 
+  async function saveFireChanges() {
+    if (!currentEvent?.id) return;
+
+    const { error } = await supabase
+      .from("events")
+      .update({
+        event_date: newEventDate,
+        event_time: newEventTime,
+        message: newEventMessage,
+      })
+      .eq("id", currentEvent.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    alert("Fire updated 🔥");
+    setIsEditing(false);
+    loadCurrentEvent();
+  }
+
+  async function cancelFire() {
+    if (!currentEvent?.id) return;
+
+    const { error } = await supabase
+      .from("events")
+      .update({ status: "cancelled" })
+      .eq("id", currentEvent.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    alert("Fire cancelled.");
+    setCurrentEvent(null);
+    setIsEditing(false);
     setNewEventDate("");
     setNewEventTime("");
     setNewEventMessage("");
@@ -74,7 +140,29 @@ export default function HostScreen() {
           Host Panel
         </Text>
 
-        {/* Date Picker */}
+        {currentEvent && (
+          <Pressable
+            onPress={() => {
+              setNewEventDate(currentEvent.event_date);
+              setNewEventTime(currentEvent.event_time);
+              setNewEventMessage(currentEvent.message || "");
+              setIsEditing(true);
+            }}
+            style={{
+              marginTop: 10,
+              backgroundColor: "#232326",
+              paddingVertical: 12,
+              borderRadius: 10,
+              borderWidth: 1,
+              borderColor: "#f97316",
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>
+              Load Current Fire
+            </Text>
+          </Pressable>
+        )}
+
         <Pressable
           onPress={() => setShowDatePicker(true)}
           style={{
@@ -89,7 +177,6 @@ export default function HostScreen() {
           </Text>
         </Pressable>
 
-        {/* Time Picker */}
         <Pressable
           onPress={() => setShowTimePicker(true)}
           style={{
@@ -104,7 +191,6 @@ export default function HostScreen() {
           </Text>
         </Pressable>
 
-        {/* Date Picker UI */}
         {showDatePicker && (
           <DateTimePicker
             value={new Date()}
@@ -119,7 +205,6 @@ export default function HostScreen() {
           />
         )}
 
-        {/* Time Picker UI */}
         {showTimePicker && (
           <DateTimePicker
             value={new Date()}
@@ -134,7 +219,6 @@ export default function HostScreen() {
           />
         )}
 
-        {/* Message */}
         <TextInput
           placeholder="Optional message"
           placeholderTextColor="#888"
@@ -149,21 +233,67 @@ export default function HostScreen() {
           }}
         />
 
-        {/* Create Button */}
-        <Pressable
-          onPress={createNewEvent}
-          style={{
-            marginTop: 15,
-            backgroundColor: "#f97316",
-            paddingVertical: 12,
-            paddingHorizontal: 20,
-            borderRadius: 10,
-          }}
-        >
-          <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-            Create Fire 🔥
-          </Text>
-        </Pressable>
+        {isEditing ? (
+          <>
+            <Pressable
+              onPress={saveFireChanges}
+              style={{
+                marginTop: 15,
+                backgroundColor: "#22c55e",
+                paddingVertical: 12,
+                borderRadius: 10,
+              }}
+            >
+              <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
+                Save Changes
+              </Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => setIsEditing(false)}
+              style={{
+                marginTop: 10,
+                backgroundColor: "#232326",
+                paddingVertical: 12,
+                borderRadius: 10,
+              }}
+            >
+              <Text style={{ color: "#fff", textAlign: "center" }}>
+                Cancel Editing
+              </Text>
+            </Pressable>
+          </>
+        ) : (
+          <Pressable
+            onPress={createNewEvent}
+            style={{
+              marginTop: 15,
+              backgroundColor: "#f97316",
+              paddingVertical: 12,
+              borderRadius: 10,
+            }}
+          >
+            <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
+              Create Fire 🔥
+            </Text>
+          </Pressable>
+        )}
+
+        {currentEvent && (
+          <Pressable
+            onPress={cancelFire}
+            style={{
+              marginTop: 10,
+              backgroundColor: "#7f1d1d",
+              paddingVertical: 12,
+              borderRadius: 10,
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>
+              Cancel Current Fire
+            </Text>
+          </Pressable>
+        )}
       </View>
     </ScrollView>
   );

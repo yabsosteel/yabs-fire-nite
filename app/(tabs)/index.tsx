@@ -1,7 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import FireHistory from "../../components/FireHistory";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+import { useFocusEffect } from "expo-router";
 import {
   Alert,
   Platform,
@@ -143,7 +144,15 @@ const notRespondedCount = notRespondedList.length;
     loadAnnouncement();
     loadName();
   }, []);
-
+useFocusEffect(
+  useCallback(() => {
+    loadEvent();
+    loadAnnouncement();
+    if (isHost) {
+      loadHostFireHistory();
+    }
+  }, [isHost])
+);
   useEffect(() => {
     if (event && savedFirstName && savedLastName) {
       const mine = event.rsvps?.find(
@@ -378,7 +387,7 @@ const notRespondedCount = notRespondedList.length;
         )
       `)
       .eq("status", "published")
-      .gte("event_date", todayForDatabase())
+      .gte("event_date", "2000-01-01")
       .order("event_date", { ascending: true })
       .order("event_time", { ascending: true })
       .limit(1)
