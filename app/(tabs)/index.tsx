@@ -1346,26 +1346,43 @@ const notGoingCount = notGoingList.length;
       )}
 
       {event && (
-        <View style={{ marginTop: 15 }}>
-          <Text style={{ color: "#fff", fontWeight: "700", marginBottom: 5 }}>
-  RSVP Summary
-</Text>
+  <View style={{ marginTop: 15 }}>
+    <Text style={{ color: "#fff", fontWeight: "700", marginBottom: 5 }}>
+      RSVP Summary
+    </Text>
 
-<Text style={{ color: "#22c55e" }}>
-  Yes: {goingCount}
-</Text>
+    <Text style={{ color: "#22c55e" }}>Yes: {goingCount}</Text>
+    <Text style={{ color: "#ef4444", marginBottom: 8 }}>
+      No: {notGoingCount}
+    </Text>
 
-<Text style={{ color: "#ef4444", marginBottom: 8 }}>
-  No: {notGoingCount}
-</Text>
+    <Text style={{ color: "#22c55e", fontWeight: "700", marginTop: 10 }}>
+      Who’s Coming
+    </Text>
+    {currentGoingList.length === 0 ? (
+      <Text style={{ color: "#b3b3ba" }}>No yes responses yet.</Text>
+    ) : (
+      currentGoingList.map((r: any) => (
+        <Text key={r.id} style={{ color: "#b3b3ba" }}>
+          • {getDisplayName(r)}
+        </Text>
+      ))
+    )}
 
-          {currentGoingList.map((r: any) => (
-            <Text key={r.id} style={{ color: "#b3b3ba" }}>
-              • {getDisplayName(r)}
-            </Text>
-          ))}
-        </View>
-      )}
+    <Text style={{ color: "#ef4444", fontWeight: "700", marginTop: 12 }}>
+      Who’s Not Coming
+    </Text>
+    {notGoingList.length === 0 ? (
+      <Text style={{ color: "#b3b3ba" }}>No no responses yet.</Text>
+    ) : (
+      notGoingList.map((r: any) => (
+        <Text key={r.id} style={{ color: "#b3b3ba" }}>
+          • {getDisplayName(r)}
+        </Text>
+      ))
+    )}
+  </View>
+)}
 
       {!savedFirstName || !savedLastName ? (
         <>
