@@ -1,4 +1,5 @@
-import { ScrollView, Text, View } from "react-native";
+import { ScrollView, Text } from "react-native";
+import FireHistory from "../../components/FireHistory";
 
 export default function HistoryScreen() {
   return (
@@ -13,9 +14,11 @@ export default function HistoryScreen() {
         Fire History
       </Text>
 
-      <Text style={{ color: "#b3b3ba", marginTop: 10 }}>
-        Next step: move full history here
-      </Text>
+      <FireHistory isHost={true}>
+  <Text style={{ color: "#b3b3ba", marginTop: 10 }}>
+    Fire history data coming next.
+  </Text>
+</FireHistory>
     </ScrollView>
   );
 }
