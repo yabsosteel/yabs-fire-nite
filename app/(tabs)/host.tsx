@@ -1,4 +1,4 @@
-import { ScrollView, Text, View } from "react-native";
+import { ScrollView, Text, View, Pressable } from "react-native";
 
 export default function HostScreen() {
   return (
@@ -23,9 +23,19 @@ export default function HostScreen() {
           Host Panel
         </Text>
 
-        <Text style={{ color: "#b3b3ba", marginTop: 10 }}>
-          Next we’ll move Fire Controls, Announcements, Reminders, Guests, and Fire History here.
-        </Text>
+        <Pressable
+          style={{
+            marginTop: 15,
+            backgroundColor: "#f97316",
+            paddingVertical: 12,
+            paddingHorizontal: 20,
+            borderRadius: 10,
+          }}
+        >
+          <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
+            Fire Controls Coming Next 🔥
+          </Text>
+        </Pressable>
       </View>
     </ScrollView>
   );
