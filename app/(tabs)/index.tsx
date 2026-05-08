@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import FireHistory from "../../components/FireHistory";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useEffect, useState } from "react";
 import {
@@ -1977,7 +1978,12 @@ export default function HomeScreen() {
                 onPress={() => setShowHostHistorySection(!showHostHistorySection)}
               />
 
-              {showHostHistorySection && renderHostFireHistory()}
+              {showHostHistorySection && (
+  <FireHistory
+    isHost={isHost}
+    renderHostFireHistory={renderHostFireHistory}
+  />
+)}
             </View>
           )}
 
