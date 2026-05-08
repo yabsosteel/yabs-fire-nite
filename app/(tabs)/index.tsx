@@ -79,6 +79,22 @@ const notGoingList = dedupePeople(
 );
 
 const notGoingCount = notGoingList.length;
+const respondedKeys = new Set(
+  (event?.rsvps || []).map((r: any) =>
+    `${r.first_name} ${r.last_name}`.toLowerCase().trim()
+  )
+);
+
+const notRespondedList = dedupePeople(
+  (approvedGuests || []).filter((guest: any) => {
+    const key = `${guest.first_name} ${guest.last_name}`.toLowerCase().trim();
+    const isHostGuest = key === "rian yablun";
+
+    return !isHostGuest && !respondedKeys.has(key);
+  })
+);
+
+const notRespondedCount = notRespondedList.length;
   const filteredHistory =
     historyFilter === "all"
       ? history
@@ -1383,7 +1399,19 @@ const notGoingCount = notGoingList.length;
     )}
   </View>
 )}
+<Text style={{ color: "#facc15", fontWeight: "700", marginTop: 12 }}>
+  Hasn’t Responded
+</Text>
 
+{notRespondedList.length === 0 ? (
+  <Text style={{ color: "#b3b3ba" }}>Everyone has responded.</Text>
+) : (
+  notRespondedList.map((person: any) => (
+    <Text key={person.id} style={{ color: "#b3b3ba" }}>
+      • {getDisplayName(person)}
+    </Text>
+  ))
+)}
       {!savedFirstName || !savedLastName ? (
         <>
           <TextInput
