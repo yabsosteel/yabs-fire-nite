@@ -1407,9 +1407,12 @@ const notRespondedCount = notRespondedList.length;
   <Text style={{ color: "#b3b3ba" }}>Everyone has responded.</Text>
 ) : (
   notRespondedList.map((person: any) => (
-    <Text key={person.id} style={{ color: "#b3b3ba" }}>
-      • {getDisplayName(person)}
-    </Text>
+    <Text
+  key={person.id}
+  style={{ color: "#b3b3ba", textAlign: "left", alignSelf: "flex-start" }}
+>
+  • {getDisplayName(person)}
+</Text>
   ))
 )}
       {!savedFirstName || !savedLastName ? (
