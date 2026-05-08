@@ -409,8 +409,8 @@ export default function HomeScreen() {
       return;
     }
 
-    //await AsyncStorage.setItem("first_name", firstName.trim());
-    //await AsyncStorage.setItem("last_name", lastName.trim());
+    await AsyncStorage.setItem("first_name", firstName.trim());
+    await AsyncStorage.setItem("last_name", lastName.trim());
 
     setSavedFirstName(firstName.trim());
     setSavedLastName(lastName.trim());
@@ -419,8 +419,8 @@ export default function HomeScreen() {
   }
 
   async function resetName() {
-    //await AsyncStorage.removeItem("first_name");
-    //await AsyncStorage.removeItem("last_name");
+    await AsyncStorage.removeItem("first_name");
+    await AsyncStorage.removeItem("last_name");
 
     setSavedFirstName(null);
     setSavedLastName(null);
