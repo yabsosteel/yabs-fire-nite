@@ -13,8 +13,23 @@ import {
   View,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
+import {
+  registerForPushNotificationsAsync,
+  sendPushNotificationToAll,
+} from "../../lib/notifications";
 
 export default function HomeScreen() {
+  useEffect(() => {
+  async function setupNotifications() {
+    try {
+      await registerForPushNotificationsAsync();
+    } catch (error) {
+      console.log("Push registration failed:", error);
+    }
+  }
+
+  setupNotifications();
+}, []);
   const [event, setEvent] = useState<any>(null);
   const [announcement, setAnnouncement] = useState<any>(null);
   const [announcementRecipients, setAnnouncementRecipients] = useState<any[]>([]);
@@ -95,20 +110,27 @@ const notRespondedList = dedupePeople(
   })
 );
 
-const notRespondedCount = notRespondedList.length;
-  const filteredHistory =
-    historyFilter === "all"
-      ? history
-      : history.filter((item: any) => item.response_status === historyFilter);
+const visibleHistory = history.filter((item: any) => {
+  const status = item.events?.status?.toLowerCase?.().trim();
+  return !item.events?.deleted_at && status !== "deleted";
+});
+const filteredHistory =
+  historyFilter === "all"
+    ? visibleHistory
+    : visibleHistory.filter((item: any) => item.response_status === historyFilter);
+  const visibleHostFireHistory = hostFireHistory.filter((fire: any) => {
+  const status = fire.status?.toLowerCase?.().trim();
+  return !fire.deleted_at && status !== "deleted";
+});
 
-  const filteredFireHistory =
-    fireHistoryFilter === "all"
-      ? hostFireHistory
-      : hostFireHistory.filter((fire: any) =>
-          fireHistoryFilter === "active"
-            ? fire.status === "published"
-            : fire.status === "cancelled"
-        );
+const filteredFireHistory =
+  fireHistoryFilter === "all"
+    ? visibleHostFireHistory
+    : visibleHostFireHistory.filter((fire: any) =>
+        fireHistoryFilter === "active"
+          ? fire.status === "published"
+          : fire.status === "cancelled"
+      );
 
   function getDisplayName(person: any) {
     if (person?.first_name && person?.last_name) {
@@ -231,9 +253,16 @@ useFocusEffect(
     alert("Push reminders are temporarily disabled while testing in Expo Go.");
   }
 
-  async function sendAnnouncementPush() {
-    alert("Announcement push is temporarily disabled while testing in Expo Go.");
-  }
+async function sendAnnouncementPush() {
+  if (!isHost || !announcement?.message) return;
+
+  await sendPushNotificationToAll(
+    "📢 Fire Update",
+    announcementMessage.trim()
+);
+
+  alert("Announcement push sent.");
+}
 
   async function loadReminderRecipients(eventId: string) {
     const { data, error } = await supabase
@@ -387,6 +416,7 @@ useFocusEffect(
         )
       `)
       .eq("status", "published")
+      .is("deleted_at", null)
       .gte("event_date", "2000-01-01")
       .order("event_date", { ascending: true })
       .order("event_time", { ascending: true })
@@ -501,62 +531,65 @@ useFocusEffect(
   }
 
   async function refreshHistory() {
-    if (!savedFirstName || !savedLastName) return;
+  if (!savedFirstName || !savedLastName) return;
 
-    let query = supabase
-      .from("rsvps")
-      .select(`
-        *,
-        events (
-          event_date,
-          event_time,
-          message,
-          status
-        )
-      `)
-      .order("created_at", { ascending: false });
+  let query = supabase
+    .from("rsvps")
+    .select(`
+      *,
+      events!inner (
+        event_date,
+        event_time,
+        message,
+        status,
+        deleted_at
+      )
+    `)
+    .is("events.deleted_at", null)
+    .neq("events.status", "deleted")
+    .order("created_at", { ascending: false });
 
-    if (!isHost) {
-      query = query.eq("first_name", savedFirstName).eq("last_name", savedLastName);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    setHistory(data ?? []);
+  if (!isHost) {
+    query = query.eq("first_name", savedFirstName).eq("last_name", savedLastName);
   }
 
+  const { data, error } = await query;
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  setHistory(data ?? []);
+}
   async function loadHostFireHistory() {
-    if (!isHost) return;
+  if (!isHost) return;
 
-    const { data, error } = await supabase
-      .from("events")
-      .select(`
-        *,
-        rsvps (
-          id,
-          first_name,
-          last_name,
-          name,
-          response_status,
-          created_at
-        )
-      `)
-      .order("event_date", { ascending: false })
-      .order("event_time", { ascending: false });
+  const { data, error } = await supabase
+    .from("events")
+    .select(`
+      *,
+      rsvps (
+        id,
+        first_name,
+        last_name,
+        name,
+        response_status,
+        created_at
+      )
+    `)
+    .is("deleted_at", null)
+    .neq("status", "deleted")
+    .order("event_date", { ascending: false })
+    .order("event_time", { ascending: false });
 
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    setHostFireHistory(data ?? []);
+  if (error) {
+    alert(error.message);
+    return;
   }
 
+  setHostFireHistory(data ?? []);
+}
   function formatDateForDatabase(date: Date) {
     return date.toISOString().split("T")[0];
   }
@@ -711,7 +744,10 @@ useFocusEffect(
       alert(error.message);
       return;
     }
-
+await sendPushNotificationToAll(
+  "📢 Fire Update",
+  announcementMessage.trim()
+);
     if (yesRsvps.length > 0 && event?.id) {
       const recipientsToInsert = yesRsvps.map((person: any) => ({
         announcement_id: newAnnouncement.id,
@@ -866,7 +902,38 @@ useFocusEffect(
     setNewGuestLastName("");
     loadApprovedGuests();
   }
+async function deleteGuest(guest: any) {
+  if (!isHost || !guest?.id) return;
 
+  Alert.alert(
+    "Delete Guest?",
+    `Permanently delete ${guest.first_name} ${guest.last_name}? This cannot be undone.`,
+    [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          const { error } = await supabase
+            .from("approved_users")
+            .delete()
+            .eq("id", guest.id);
+
+          if (error) {
+            alert(error.message);
+            return;
+          }
+
+          alert(`${guest.first_name} ${guest.last_name} has been deleted.`);
+
+          setApprovedGuests((prev) =>
+            prev.filter((person) => person.id !== guest.id)
+          );
+        },
+      },
+    ]
+  );
+}
   async function deactivateGuest(guest: any) {
     if (!isHost || !guest?.id) return;
 
@@ -1177,7 +1244,18 @@ useFocusEffect(
 
   function renderHostFireHistory() {
     if (!isHost) return null;
-
+const displayFireHistory = (
+  fireHistoryFilter === "all"
+    ? hostFireHistory
+    : hostFireHistory.filter((fire: any) =>
+        fireHistoryFilter === "active"
+          ? fire.status === "published"
+          : fire.status === "cancelled"
+      )
+).filter((fire: any) => {
+  const status = fire.status?.toLowerCase?.().trim();
+  return !fire.deleted_at && status !== "deleted";
+});
     return (
       <View style={{ marginTop: 15 }}>
         <Text style={{ color: "#fff", fontSize: 18, fontWeight: "700" }}>
@@ -1219,12 +1297,12 @@ useFocusEffect(
           </Text>
         </Pressable>
 
-        {filteredFireHistory.length === 0 ? (
+        {displayFireHistory.length === 0 ? (
           <Text style={{ color: "#b3b3ba", marginTop: 10 }}>
             No fires match this filter.
           </Text>
         ) : (
-          filteredFireHistory.map((fire: any) => {
+          displayFireHistory.map((fire: any) => {
             const yesList = dedupePeople(
               fire.rsvps?.filter((r: any) => r.response_status === "going") || []
             );
@@ -1327,7 +1405,10 @@ useFocusEffect(
       </View>
     );
   }
-
+const displayHistory = filteredHistory.filter((item: any) => {
+  const status = item.events?.status?.toLowerCase?.().trim();
+  return status !== "deleted";
+});
   const mainTitle = event ? status : announcement ? "Fire Announcement" : status;
   const mainMessage = event ? message : announcement ? announcement.message : message;
 
@@ -1824,19 +1905,19 @@ useFocusEffect(
                       {renderAnnouncementRecipients()}
 
                       <Pressable
-                        onPress={sendAnnouncementPush}
-                        style={{
-                          marginTop: 10,
-                          backgroundColor: "#22c55e",
-                          paddingVertical: 12,
-                          paddingHorizontal: 20,
-                          borderRadius: 10,
-                        }}
-                      >
-                        <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                          Send Announcement Push Disabled
-                        </Text>
-                      </Pressable>
+  onPress={sendAnnouncementPush}
+  style={{
+    marginTop: 10,
+    backgroundColor: "#22c55e",
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+  }}
+>
+  <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
+    Send Announcement Push
+  </Text>
+</Pressable>
                     </>
                   )}
 
@@ -2051,6 +2132,22 @@ useFocusEffect(
                               </Text>
                             </Pressable>
                           )}
+                          <Pressable
+  onPress={() => deleteGuest(guest)}
+  style={{
+    marginTop: 8,
+    backgroundColor: "#450a0a",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#ef4444",
+  }}
+>
+  <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>
+    Delete Guest
+  </Text>
+</Pressable>
                         </View>
                       ))
                     )}
@@ -2064,13 +2161,11 @@ useFocusEffect(
                 onPress={() => setShowHostHistorySection(!showHostHistorySection)}
               />
 
-              {showHostHistorySection && (
-  <FireHistory
-    isHost={isHost}
-    renderHostFireHistory={renderHostFireHistory}
-  />
-)}
-            </View>
+{showHostHistorySection && (
+  <FireHistory isHost={isHost}>
+    {renderHostFireHistory()}
+  </FireHistory>
+)}            </View>
           )}
 
           {showHistory && (
@@ -2107,12 +2202,20 @@ useFocusEffect(
                 />
               </View>
 
-              {filteredHistory.length === 0 ? (
+              {displayHistory.filter((item: any) => {
+  const status = item.events?.status?.toLowerCase?.().trim();
+  return status !== "deleted";
+}).length === 0 ? (
                 <Text style={{ color: "#b3b3ba", marginTop: 10 }}>
                   No history matches this filter.
                 </Text>
               ) : (
-                filteredHistory.map((item) => (
+                displayHistory
+  .filter((item: any) => {
+    const status = item.events?.status?.toLowerCase?.().trim();
+    return status !== "deleted";
+  })
+  .map((item) => (
                   <View
                     key={item.id}
                     style={{
