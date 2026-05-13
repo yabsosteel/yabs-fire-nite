@@ -662,122 +662,7 @@ async function sendChatMessage() {
     setApprovedGuests(data ?? []);
   }
 
-  function RSVPButton({
-  label,
-  activeLabel,
-  active,
-  color,
-  textColor,
-  onPress,
-}: {
-  label: string;
-  activeLabel: string;
-  active: boolean;
-  color: string;
-  textColor: string;
-  onPress: () => void;
-}) {
-  const scale = useSharedValue(1);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-
-  return (
-    <Animated.View style={animatedStyle}>
-      <Pressable
-        onPressIn={() => {
-          scale.value = withSpring(0.96);
-        }}
-        onPressOut={() => {
-          scale.value = withSpring(1);
-        }}
-        onPress={onPress}
-        style={[
-          styles.rsvpButton,
-          {
-            backgroundColor: active ? color : "#232326",
-            borderColor: active ? color : "#2f2f35",
-          },
-        ]}
-      >
-        <Text
-          style={[
-            styles.rsvpButtonText,
-            {
-              color: active ? textColor : "#fff",
-            },
-          ]}
-        >
-          {active ? activeLabel : label}
-        </Text>
-      </Pressable>
-    </Animated.View>
-  );
-}
-
-  function FilterButton({
-    label,
-    active,
-    onPress,
-  }: {
-    label: string;
-    active: boolean;
-    onPress: () => void;
-  }) {
-    return (
-      <Pressable
-        onPress={onPress}
-        style={[
-          styles.filterButton,
-          {
-            backgroundColor: active ? "#f97316" : "#232326",
-            borderColor: active ? "#f97316" : "#2f2f35",
-          },
-        ]}
-      >
-        <Text style={{ color: active ? "#111" : "#fff", fontWeight: "700" }}>
-          {label}
-        </Text>
-      </Pressable>
-    );
-  }
-function SkeletonCard() {
-  const opacity = useSharedValue(0.4);
-
-  useEffect(() => {
-    opacity.value = withRepeat(
-      withTiming(0.8, { duration: 900 }),
-      -1,
-      true
-    );
-  }, []);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value,
-  }));
-
-  return (
-    <Animated.View
-      style={[
-        {
-          width: "100%",
-          backgroundColor: "#18181b",
-          borderRadius: 22,
-          padding: 20,
-          borderWidth: 1,
-          borderColor: "#2f2f35",
-          marginTop: 8,
-          height: 280,
-        },
-        animatedStyle,
-      ]}
-    />
-  );
-}
-
-  return (
+      return (
     <ScrollView contentContainerStyle={styles.screen}>
       <View style={styles.header}>
         <Text style={styles.appTitle}>🔥 Yabs Fire Nite</Text>
@@ -1103,6 +988,120 @@ function SkeletonCard() {
         </>
       )}
     </ScrollView>
+  );
+}
+
+function RSVPButton({
+  label,
+  activeLabel,
+  active,
+  color,
+  textColor,
+  onPress,
+}: {
+  label: string;
+  activeLabel: string;
+  active: boolean;
+  color: string;
+  textColor: string;
+  onPress: () => void;
+}) {
+  const scale = useSharedValue(1);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+
+  return (
+    <Animated.View style={animatedStyle}>
+      <Pressable
+        onPressIn={() => {
+          scale.value = withSpring(0.96);
+        }}
+        onPressOut={() => {
+          scale.value = withSpring(1);
+        }}
+        onPress={onPress}
+        style={[
+          styles.rsvpButton,
+          {
+            backgroundColor: active ? color : "#232326",
+            borderColor: active ? color : "#2f2f35",
+          },
+        ]}
+      >
+        <Text
+          style={[
+            styles.rsvpButtonText,
+            {
+              color: active ? textColor : "#fff",
+            },
+          ]}
+        >
+          {active ? activeLabel : label}
+        </Text>
+      </Pressable>
+    </Animated.View>
+  );
+}
+function FilterButton({
+    label,
+    active,
+    onPress,
+  }: {
+    label: string;
+    active: boolean;
+    onPress: () => void;
+  }) {
+    return (
+      <Pressable
+        onPress={onPress}
+        style={[
+          styles.filterButton,
+          {
+            backgroundColor: active ? "#f97316" : "#232326",
+            borderColor: active ? "#f97316" : "#2f2f35",
+          },
+        ]}
+      >
+        <Text style={{ color: active ? "#111" : "#fff", fontWeight: "700" }}>
+          {label}
+        </Text>
+      </Pressable>
+    );
+  }
+function SkeletonCard() {
+  const opacity = useSharedValue(0.4);
+
+  useEffect(() => {
+    opacity.value = withRepeat(
+      withTiming(0.8, { duration: 900 }),
+      -1,
+      true
+    );
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+  }));
+
+  return (
+    <Animated.View
+      style={[
+        {
+          width: "100%",
+          backgroundColor: "#18181b",
+          borderRadius: 22,
+          padding: 20,
+          borderWidth: 1,
+          borderColor: "#2f2f35",
+          marginTop: 8,
+          height: 280,
+        },
+        animatedStyle,
+      ]}
+    />
   );
 }
 

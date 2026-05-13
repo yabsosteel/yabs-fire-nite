@@ -16,6 +16,35 @@ import {
   sendPushNotificationToAll,
 } from "../../lib/notifications";
 
+function Section({
+    title,
+    subtitle,
+    open,
+    onPress,
+    children,
+  }: {
+    title: string;
+    subtitle?: string;
+    open: boolean;
+    onPress: () => void;
+    children: any;
+  }) {
+    return (
+      <View style={styles.card}>
+        <Pressable onPress={onPress} style={styles.sectionHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.cardLabel}>{title}</Text>
+            {subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}
+          </View>
+
+          <Text style={styles.chevron}>{open ? "▼" : "▶"}</Text>
+        </Pressable>
+
+        {open && <View style={{ marginTop: 10 }}>{children}</View>}
+      </View>
+    );
+  }
+
 export default function HostScreen() {
   const [newEventDate, setNewEventDate] = useState("");
   const [newEventTime, setNewEventTime] = useState("");
@@ -39,12 +68,12 @@ export default function HostScreen() {
   const [reminderRecipients, setReminderRecipients] = useState<any[]>([]);
   const [expandedFireId, setExpandedFireId] = useState<string | null>(null);
 
- const [showCreateEditFire, setShowCreateEditFire] = useState(false);
-const [showFireManagement, setShowFireManagement] = useState(false);
-const [showFireHistory, setShowFireHistory] = useState(false);
-const [showAnnouncements, setShowAnnouncements] = useState(false);
-const [showReminders, setShowReminders] = useState(false);
-const [showGuests, setShowGuests] = useState(false);
+  const [showCreateEditFire, setShowCreateEditFire] = useState(false);
+  const [showFireManagement, setShowFireManagement] = useState(false);
+  const [showFireHistory, setShowFireHistory] = useState(false);
+  const [showAnnouncements, setShowAnnouncements] = useState(false);
+  const [showReminders, setShowReminders] = useState(false);
+  const [showGuests, setShowGuests] = useState(false);
 
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -131,35 +160,6 @@ const [showGuests, setShowGuests] = useState(false);
       seen.add(key);
       return true;
     });
-  }
-
-  function Section({
-    title,
-    subtitle,
-    open,
-    onPress,
-    children,
-  }: {
-    title: string;
-    subtitle?: string;
-    open: boolean;
-    onPress: () => void;
-    children: any;
-  }) {
-    return (
-      <View style={styles.card}>
-        <Pressable onPress={onPress} style={styles.sectionHeader}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.cardLabel}>{title}</Text>
-            {subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}
-          </View>
-
-          <Text style={styles.chevron}>{open ? "▼" : "▶"}</Text>
-        </Pressable>
-
-        {open && <View style={{ marginTop: 10 }}>{children}</View>}
-      </View>
-    );
   }
 
   function adjustTime(minutesToAdd: number) {
@@ -641,7 +641,6 @@ const [showGuests, setShowGuests] = useState(false);
   setNewGuestLastName("");
   loadApprovedGuests();
 }
-
   async function deactivateGuest(guest: any) {
   const { error } = await supabase
     .from("approved_users")
@@ -845,13 +844,15 @@ async function deleteGuest(guest: any) {
         )}
 
         <TextInput
-          placeholder="Optional message"
-          placeholderTextColor="#888"
-          value={newEventMessage}
-          onChangeText={setNewEventMessage}
-          style={styles.textInput}
-          multiline
-        />
+  placeholder="Optional message"
+  placeholderTextColor="#888"
+  value={newEventMessage}
+  onChangeText={setNewEventMessage}
+  style={styles.textInput}
+  multiline
+  blurOnSubmit={false}
+  textAlignVertical="top"
+/>
 
         {isEditing ? (
           <>
