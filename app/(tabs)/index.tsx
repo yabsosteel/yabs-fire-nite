@@ -1,28 +1,37 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import FireHistory from "../../components/FireHistory";
-import DateTimePicker from "@react-native-community/datetimepicker";
-import { useEffect, useState, useCallback } from "react";
-import { useFocusEffect } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import * as Notifications from "expo-notifications";
 import {
-  Alert,
-  Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
+import { registerForPushNotificationsAsync } from "../../lib/notifications";
+import { sendPushNotificationToHosts } from "../../lib/notifications";
+import Animated, {
+  FadeInUp,
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withRepeat,
+  withTiming,
+} from "react-native-reanimated";
 
 export default function HomeScreen() {
+  const router = useRouter();
+
   const [event, setEvent] = useState<any>(null);
   const [announcement, setAnnouncement] = useState<any>(null);
-  const [announcementRecipients, setAnnouncementRecipients] = useState<any[]>([]);
-  const [announcementHistory, setAnnouncementHistory] = useState<any[]>([]);
-  const [expandedAnnouncementId, setExpandedAnnouncementId] = useState<string | null>(null);
-
   const [status, setStatus] = useState("Loading event...");
   const [message, setMessage] = useState("");
+  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const chatScrollRef = useRef<ScrollView>(null);
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -32,38 +41,16 @@ export default function HomeScreen() {
   const [isApproved, setIsApproved] = useState(false);
   const [approvalChecked, setApprovalChecked] = useState(false);
 
-  const [showHostPanel, setShowHostPanel] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-
-  const [showFireControls, setShowFireControls] = useState(true);
-  const [showAnnouncementsSection, setShowAnnouncementsSection] = useState(false);
-  const [showRemindersSection, setShowRemindersSection] = useState(false);
-  const [showGuestsSection, setShowGuestsSection] = useState(false);
-  const [showHostHistorySection, setShowHostHistorySection] = useState(false);
-
-  const [historyFilter, setHistoryFilter] = useState<"all" | "going" | "not_going">("all");
-  const [fireHistoryFilter, setFireHistoryFilter] = useState<"all" | "active" | "cancelled">("all");
-
-  const [newEventDate, setNewEventDate] = useState("");
-  const [newEventTime, setNewEventTime] = useState("");
-  const [newEventMessage, setNewEventMessage] = useState("");
-  const [isEditingFire, setIsEditingFire] = useState(false);
-
-  const [announcementMessage, setAnnouncementMessage] = useState("");
-  const [reminderRecipients, setReminderRecipients] = useState<any[]>([]);
-
-  const [newGuestFirstName, setNewGuestFirstName] = useState("");
-  const [newGuestLastName, setNewGuestLastName] = useState("");
-  const [approvedGuests, setApprovedGuests] = useState<any[]>([]);
-
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
-
   const [history, setHistory] = useState<any[]>([]);
-  const [hostFireHistory, setHostFireHistory] = useState<any[]>([]);
-  const [expandedFireId, setExpandedFireId] = useState<string | null>(null);
+  const [historyFilter, setHistoryFilter] = useState<
+    "all" | "going" | "maybe" | "not_going"
+  >("all");
 
-  const [myRSVP, setMyRSVP] = useState<"going" | "not_going" | null>(null);
+  const [approvedGuests, setApprovedGuests] = useState<any[]>([]);
+  const [myRSVP, setMyRSVP] = useState<
+    "going" | "maybe" | "not_going" | null
+  >(null);
 
   const isHost =
     savedFirstName?.toLowerCase() === "rian" &&
@@ -73,50 +60,254 @@ export default function HomeScreen() {
     event?.rsvps?.filter((r: any) => r.response_status === "going") || []
   );
 
+  const maybeList = dedupePeople(
+    event?.rsvps?.filter((r: any) => r.response_status === "maybe") || []
+  );
+
+  const notGoingList = dedupePeople(
+    event?.rsvps?.filter((r: any) => r.response_status === "not_going") || []
+  );
+
   const goingCount = currentGoingList.length;
+  const maybeCount = maybeList.length;
+  const notGoingCount = notGoingList.length;
 
-const notGoingList = dedupePeople(
-  event?.rsvps?.filter((r: any) => r.response_status === "not_going") || []
-);
+  const respondedKeys = new Set(
+    (event?.rsvps || []).map((r: any) =>
+      `${r.first_name} ${r.last_name}`.toLowerCase().trim()
+    )
+  );
 
-const notGoingCount = notGoingList.length;
-const respondedKeys = new Set(
-  (event?.rsvps || []).map((r: any) =>
-    `${r.first_name} ${r.last_name}`.toLowerCase().trim()
-  )
-);
+  const notRespondedList = dedupePeople(
+    (approvedGuests || []).filter((guest: any) => {
+      const key = `${guest.first_name} ${guest.last_name}`
+        .toLowerCase()
+        .trim();
 
-const notRespondedList = dedupePeople(
-  (approvedGuests || []).filter((guest: any) => {
-    const key = `${guest.first_name} ${guest.last_name}`.toLowerCase().trim();
-    const isHostGuest = key === "rian yablun";
+      return key !== "rian yablun" && !respondedKeys.has(key);
+    })
+  );
 
-    return !isHostGuest && !respondedKeys.has(key);
-  })
-);
+  const visibleHistory = history.filter((item: any) => {
+    const itemStatus = item.events?.status?.toLowerCase?.().trim();
+    return !item.events?.deleted_at && itemStatus !== "deleted";
+  });
 
-const notRespondedCount = notRespondedList.length;
-  const filteredHistory =
+  const displayHistory =
     historyFilter === "all"
-      ? history
-      : history.filter((item: any) => item.response_status === historyFilter);
-
-  const filteredFireHistory =
-    fireHistoryFilter === "all"
-      ? hostFireHistory
-      : hostFireHistory.filter((fire: any) =>
-          fireHistoryFilter === "active"
-            ? fire.status === "published"
-            : fire.status === "cancelled"
+      ? visibleHistory
+      : visibleHistory.filter(
+          (item: any) => item.response_status === historyFilter
         );
+const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setupNotifications();
+    loadEvent();
+    loadAnnouncement();
+    loadName();
+  }, []);
+
+  useEffect(() => {
+    if (event?.id) {
+      scheduleFireReminderIfNeeded(event);
+    }
+  }, [event?.id, event?.event_date, event?.event_time]);
+useEffect(() => {
+  if (event?.id) {
+    loadChatMessages();
+  }
+}, [event?.id]);
+useEffect(() => {
+  if (!event?.id) return;
+
+  const channel = supabase
+    .channel(`fire-chat-${event.id}`)
+    .on(
+      "postgres_changes",
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "fire_chat",
+        filter: `event_id=eq.${event.id}`,
+      },
+      (payload) => {
+        const newMessage = payload.new;
+
+        setChatMessages((currentMessages: any[]) => {
+          const alreadyExists = currentMessages.some(
+            (message) => message.id === newMessage.id
+          );
+
+          if (alreadyExists) return currentMessages;
+
+          return [...currentMessages, newMessage];
+        });
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [event?.id]);
+  useEffect(() => {
+    const channel = supabase
+      .channel("realtime-home")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "events" },
+        () => {
+          loadEvent();
+          loadAnnouncement();
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "rsvps" },
+        () => {
+          loadEvent();
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "announcements" },
+        () => {
+          loadAnnouncement();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadEvent();
+      loadAnnouncement();
+
+      if (isHost) {
+        loadApprovedGuests();
+      }
+    }, [isHost])
+  );
+
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        const data = response.notification.request.content.data;
+
+        if (data?.screen === "home") {
+          router.push("/");
+        }
+      }
+    );
+
+    return () => subscription.remove();
+  }, [router]);
+
+  useEffect(() => {
+    if (event && savedFirstName && savedLastName) {
+      const mine = event.rsvps?.find(
+        (r: any) =>
+          r.first_name?.toLowerCase() === savedFirstName.toLowerCase() &&
+          r.last_name?.toLowerCase() === savedLastName.toLowerCase()
+      );
+
+      setMyRSVP(mine?.response_status || null);
+    } else {
+      setMyRSVP(null);
+    }
+  }, [event, savedFirstName, savedLastName]);
+
+  useEffect(() => {
+    if (isHost) {
+      loadApprovedGuests();
+    }
+  }, [isHost]);
+
+  async function setupNotifications() {
+    try {
+      await registerForPushNotificationsAsync();
+    } catch (error) {
+      console.log("Push registration failed:", error);
+    }
+  }
+
+  async function scheduleFireReminderIfNeeded(fireEvent: any) {
+    if (!fireEvent?.id || !fireEvent?.event_date || !fireEvent?.event_time) {
+      return;
+    }
+
+    const fireDateTime = new Date(
+      `${fireEvent.event_date}T${fireEvent.event_time}`
+    );
+
+    const reminderTime = new Date(fireDateTime);
+    reminderTime.setHours(reminderTime.getHours() - 1);
+
+    if (reminderTime <= new Date()) {
+      return;
+    }
+
+    const reminderAt = reminderTime.toISOString();
+    const reminderKey = `scheduled_fire_reminder_${fireEvent.id}_${fireEvent.event_date}_${fireEvent.event_time}`;
+
+    const alreadyScheduled = await AsyncStorage.getItem(reminderKey);
+
+    const scheduledNotifications =
+      await Notifications.getAllScheduledNotificationsAsync();
+
+    const matchingReminderAlreadyExists = scheduledNotifications.some(
+      (notification: any) =>
+        notification.content?.data?.type === "fire_reminder" &&
+        notification.content?.data?.eventId === fireEvent.id &&
+        notification.content?.data?.reminderAt === reminderAt
+    );
+
+    if (alreadyScheduled === "true" && matchingReminderAlreadyExists) {
+      return;
+    }
+
+    for (const notification of scheduledNotifications as any[]) {
+      if (notification.content?.data?.type === "fire_reminder") {
+        await Notifications.cancelScheduledNotificationAsync(
+          notification.identifier
+        );
+      }
+    }
+
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "🔥 Fire reminder",
+        body: `${fireEvent.title || "Yabs Fire Nite"} starts in 1 hour.`,
+        data: {
+          type: "fire_reminder",
+          screen: "home",
+          eventId: fireEvent.id,
+          reminderAt,
+        },
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.DATE,
+        date: reminderTime,
+      },
+    });
+
+    await AsyncStorage.setItem(reminderKey, "true");
+  }
 
   function getDisplayName(person: any) {
     if (person?.first_name && person?.last_name) {
       return `${person.first_name} ${person.last_name}`;
     }
+
     if (person?.name) return person.name;
     if (person?.first_name) return person.first_name;
     if (person?.last_name) return person.last_name;
+
     return "Unknown Guest";
   }
 
@@ -130,79 +321,11 @@ const notRespondedCount = notRespondedList.length;
     return list.filter((person: any) => {
       const key = getPersonKey(person);
 
-      if (seen.has(key)) {
-        return false;
-      }
+      if (seen.has(key)) return false;
 
       seen.add(key);
       return true;
     });
-  }
-
-  useEffect(() => {
-    loadEvent();
-    loadAnnouncement();
-    loadName();
-  }, []);
-useFocusEffect(
-  useCallback(() => {
-    loadEvent();
-    loadAnnouncement();
-    if (isHost) {
-      loadHostFireHistory();
-    }
-  }, [isHost])
-);
-  useEffect(() => {
-    if (event && savedFirstName && savedLastName) {
-      const mine = event.rsvps?.find(
-        (r: any) =>
-          r.first_name?.toLowerCase() === savedFirstName.toLowerCase() &&
-          r.last_name?.toLowerCase() === savedLastName.toLowerCase()
-      );
-      setMyRSVP(mine?.response_status || null);
-    } else {
-      setMyRSVP(null);
-    }
-  }, [event, savedFirstName, savedLastName]);
-
-  useEffect(() => {
-    if (isHost) {
-      loadApprovedGuests();
-      loadHostFireHistory();
-      loadAnnouncementHistory();
-      if (event?.id) loadReminderRecipients(event.id);
-    }
-  }, [isHost, event?.id]);
-
-  useEffect(() => {
-    if (!event?.id) return;
-
-    const channel = supabase
-      .channel(`rsvps-${event.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "rsvps",
-          filter: `event_id=eq.${event.id}`,
-        },
-        () => {
-          loadEvent();
-          if (showHistory) refreshHistory();
-          if (isHost) loadHostFireHistory();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [event?.id, showHistory, isHost]);
-
-  function todayForDatabase() {
-    return new Date().toISOString().split("T")[0];
   }
 
   function formatDisplayDate(dateString: string) {
@@ -223,136 +346,56 @@ useFocusEffect(
     return `${weekday}, ${month} ${day}${suffix}`;
   }
 
-  async function registerForPushNotifications() {
-    alert("Push notifications are temporarily disabled while testing in Expo Go.");
+  function formatTime(timeString: string) {
+    const date = new Date(`2000-01-01T${timeString}`);
+
+    return date.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
   }
 
-  async function sendReminderPush(reminderType: "tomorrow" | "two_hour") {
-    alert("Push reminders are temporarily disabled while testing in Expo Go.");
+  function formatFireDateTime(dateString: string, timeString: string) {
+    const eventDate = new Date(`${dateString}T${timeString}`);
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+
+    const eventDay = new Date(eventDate);
+    eventDay.setHours(0, 0, 0, 0);
+
+    const time = formatTime(timeString);
+
+    if (eventDay.getTime() === today.getTime()) {
+      return `Tonight at ${time}`;
+    }
+
+    if (eventDay.getTime() === tomorrow.getTime()) {
+      return `Tomorrow at ${time}`;
+    }
+
+    return `${formatDisplayDate(dateString)} at ${time}`;
   }
 
-  async function sendAnnouncementPush() {
-    alert("Announcement push is temporarily disabled while testing in Expo Go.");
+  function formatHistoryResponse(response: string) {
+    if (response === "going") return "Yes — Coming";
+    if (response === "maybe") return "Maybe";
+    return "No — Not Coming";
   }
 
-  async function loadReminderRecipients(eventId: string) {
-    const { data, error } = await supabase
-      .from("reminder_recipients")
-      .select("*")
-      .eq("event_id", eventId)
-      .order("created_at", { ascending: true });
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    setReminderRecipients(data ?? []);
-  }
-
-  async function createReminderList(reminderType: "tomorrow" | "two_hour") {
-    if (!isHost || !event?.id) {
-      alert("There is no active fire for reminders.");
-      return;
-    }
-
-    const yesRsvps = dedupePeople(
-      event?.rsvps?.filter((r: any) => r.response_status === "going") || []
-    );
-
-    if (yesRsvps.length === 0) {
-      alert("No RSVP Yes guests found for this fire.");
-      return;
-    }
-
-    const { data: existing, error: lookupError } = await supabase
-      .from("reminder_recipients")
-      .select("*")
-      .eq("event_id", event.id)
-      .eq("reminder_type", reminderType);
-
-    if (lookupError) {
-      alert(lookupError.message);
-      return;
-    }
-
-    const existingKeys = new Set(
-      (existing ?? []).map((person: any) => getPersonKey(person))
-    );
-
-    const recipientsToInsert = yesRsvps
-      .filter((person: any) => !existingKeys.has(getPersonKey(person)))
-      .map((person: any) => ({
-        event_id: event.id,
-        name: getDisplayName(person),
-        first_name: person.first_name || null,
-        last_name: person.last_name || null,
-        response_status: person.response_status,
-        reminder_type: reminderType,
-      }));
-
-    if (recipientsToInsert.length === 0) {
-      alert(
-        reminderType === "tomorrow"
-          ? "Tomorrow reminder list is already up to date."
-          : "2 hour reminder list is already up to date."
-      );
-      await loadReminderRecipients(event.id);
-      return;
-    }
-
-    const { error } = await supabase
-      .from("reminder_recipients")
-      .insert(recipientsToInsert);
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    alert(
-      reminderType === "tomorrow"
-        ? `Tomorrow reminder list created with ${recipientsToInsert.length} recipient(s).`
-        : `2 hour reminder list created with ${recipientsToInsert.length} recipient(s).`
-    );
-
-    await loadReminderRecipients(event.id);
-  }
-
-  async function loadAnnouncementRecipients(announcementId: string) {
-    const { data, error } = await supabase
-      .from("announcement_recipients")
-      .select("*")
-      .eq("announcement_id", announcementId)
-      .order("created_at", { ascending: true });
-
-    if (!error) setAnnouncementRecipients(data ?? []);
-  }
-
-  async function loadAnnouncementHistory() {
-    if (!isHost) return;
-
-    const { data, error } = await supabase
-      .from("announcements")
-      .select(`
-        *,
-        announcement_recipients (
-          id,
-          name,
-          first_name,
-          last_name,
-          response_status,
-          created_at
-        )
-      `)
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    setAnnouncementHistory(data ?? []);
+  function formatRSVPDate(dateString: string) {
+    return new Date(dateString).toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
   }
 
   async function loadAnnouncement() {
@@ -366,14 +409,14 @@ useFocusEffect(
 
     if (!error && data) {
       setAnnouncement(data);
-      await loadAnnouncementRecipients(data.id);
     } else {
       setAnnouncement(null);
-      setAnnouncementRecipients([]);
     }
   }
 
   async function loadEvent() {
+    setLoading(true);
+    const today = new Date().toISOString().split("T")[0];
     const { data, error } = await supabase
       .from("events")
       .select(`
@@ -387,7 +430,8 @@ useFocusEffect(
         )
       `)
       .eq("status", "published")
-      .gte("event_date", "2000-01-01")
+      .is("deleted_at", null)
+      .gte("event_date", today)
       .order("event_date", { ascending: true })
       .order("event_time", { ascending: true })
       .limit(1)
@@ -397,14 +441,14 @@ useFocusEffect(
       setEvent(null);
       setStatus("No upcoming fire found");
       setMessage("");
+      setLoading(false);
       return;
     }
 
     setEvent(data);
-    setStatus(data.title);
-    setMessage(
-      `${formatDisplayDate(data.event_date)} at ${data.event_time}\n${data.message ?? ""}`
-    );
+    setStatus(data.title || "Next Fire");
+    setMessage(data.message || "");
+    setLoading(false);
   }
 
   async function loadName() {
@@ -421,17 +465,17 @@ useFocusEffect(
   }
 
   async function checkApproval(first: string, last: string) {
-    const { data, error } = await supabase
-      .from("approved_users")
-      .select("*")
-      .eq("first_name", first)
-      .eq("last_name", last)
-      .eq("access_status", "active")
-      .maybeSingle();
+  const { data, error } = await supabase
+    .from("approved_users")
+    .select("*")
+    .eq("first_name", first)
+    .eq("last_name", last)
+    .eq("is_approved", true)
+    .maybeSingle();
 
-    setIsApproved(!error && !!data);
-    setApprovalChecked(true);
-  }
+  setIsApproved(!error && !!data);
+  setApprovalChecked(true);
+}
 
   async function saveName() {
     if (!firstName.trim() || !lastName.trim()) {
@@ -463,7 +507,7 @@ useFocusEffect(
     setMyRSVP(null);
   }
 
-  async function handleRSVP(response_status: "going" | "not_going") {
+  async function handleRSVP(response_status: "going" | "maybe" | "not_going") {
     if (!event || !savedFirstName || !savedLastName || !isApproved) return;
 
     const { error } = await supabase.from("rsvps").upsert(
@@ -479,12 +523,45 @@ useFocusEffect(
 
     if (error) {
       alert(error.message);
-    } else {
-      setMyRSVP(response_status);
-      alert(response_status === "going" ? "You're in 🔥" : "Got it — marked not coming");
-      loadEvent();
+      return;
+    }
+    
+const formattedDate = new Date(event.event_date).toLocaleDateString(
+  "en-US",
+  {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  }
+);
 
-      if (showHistory) await refreshHistory();
+const responseText =
+  response_status === "going"
+    ? "is going to"
+    : response_status === "maybe"
+    ? "is maybe attending"
+    : "is not going to";
+
+await sendPushNotificationToHosts(
+  "Fire RSVP Update",
+  `${savedFirstName} ${savedLastName} ${responseText} ${
+    event.title || "the Fire"
+  } on ${formattedDate}.`
+);
+    setMyRSVP(response_status);
+
+    alert(
+      response_status === "going"
+        ? "You're in 🔥"
+        : response_status === "maybe"
+        ? "Got it — marked maybe"
+        : "Got it — marked not coming"
+    );
+
+    await loadEvent();
+
+    if (showHistory) {
+      await refreshHistory();
     }
   }
 
@@ -499,7 +576,42 @@ useFocusEffect(
     await refreshHistory();
     setShowHistory(true);
   }
+async function loadChatMessages() {
+  if (!event?.id) return;
 
+  const { data, error } = await supabase
+    .from("fire_chat")
+    .select("*")
+    .eq("event_id", event.id)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  setChatMessages(data ?? []);
+}
+
+async function sendChatMessage() {
+  if (!event?.id || !savedFirstName || !savedLastName || !chatInput.trim()) {
+    return;
+  }
+
+  const { error } = await supabase.from("fire_chat").insert({
+    event_id: event.id,
+    first_name: savedFirstName,
+    last_name: savedLastName,
+    message: chatInput.trim(),
+  });
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  setChatInput("");
+}
   async function refreshHistory() {
     if (!savedFirstName || !savedLastName) return;
 
@@ -507,13 +619,16 @@ useFocusEffect(
       .from("rsvps")
       .select(`
         *,
-        events (
+        events!inner (
           event_date,
           event_time,
           message,
-          status
+          status,
+          deleted_at
         )
       `)
+      .is("events.deleted_at", null)
+      .neq("events.status", "deleted")
       .order("created_at", { ascending: false });
 
     if (!isHost) {
@@ -528,276 +643,6 @@ useFocusEffect(
     }
 
     setHistory(data ?? []);
-  }
-
-  async function loadHostFireHistory() {
-    if (!isHost) return;
-
-    const { data, error } = await supabase
-      .from("events")
-      .select(`
-        *,
-        rsvps (
-          id,
-          first_name,
-          last_name,
-          name,
-          response_status,
-          created_at
-        )
-      `)
-      .order("event_date", { ascending: false })
-      .order("event_time", { ascending: false });
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    setHostFireHistory(data ?? []);
-  }
-
-  function formatDateForDatabase(date: Date) {
-    return date.toISOString().split("T")[0];
-  }
-
-  function formatTimeForDatabase(date: Date) {
-    return date.toTimeString().slice(0, 5);
-  }
-
-  function loadCurrentFireForEditing() {
-    if (!event?.id) {
-      alert("There is no active fire to edit.");
-      return;
-    }
-
-    setNewEventDate(event.event_date || "");
-    setNewEventTime(event.event_time || "");
-    setNewEventMessage(event.message || "");
-    setIsEditingFire(true);
-  }
-
-  function clearFireForm() {
-    setNewEventDate("");
-    setNewEventTime("");
-    setNewEventMessage("");
-    setIsEditingFire(false);
-  }
-
-  async function createNewEvent() {
-    if (!isHost) return;
-
-    if (!newEventDate.trim() || !newEventTime.trim()) {
-      alert("Please choose a date and time.");
-      return;
-    }
-
-    const { error } = await supabase.from("events").insert({
-      title: "Yabs Fire Nite",
-      event_date: newEventDate.trim(),
-      event_time: newEventTime.trim(),
-      message: newEventMessage.trim(),
-      status: "published",
-    });
-
-    if (error) {
-      alert(error.message);
-    } else {
-      alert("Fire event published 🔥");
-      clearFireForm();
-      await loadEvent();
-      await loadHostFireHistory();
-      if (showHistory) await refreshHistory();
-    }
-  }
-
-  async function saveFireChanges() {
-    if (!isHost || !event?.id) return;
-
-    if (!newEventDate.trim() || !newEventTime.trim()) {
-      alert("Please choose a date and time.");
-      return;
-    }
-
-    const { error } = await supabase
-      .from("events")
-      .update({
-        event_date: newEventDate.trim(),
-        event_time: newEventTime.trim(),
-        message: newEventMessage.trim(),
-      })
-      .eq("id", event.id);
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    alert("Fire updated 🔥");
-    clearFireForm();
-    await loadEvent();
-    await loadHostFireHistory();
-    if (showHistory) await refreshHistory();
-  }
-
-  async function cancelCurrentEvent() {
-    if (!event?.id || !isHost) return;
-
-    Alert.alert(
-      "Cancel Fire?",
-      "This will remove the current fire from the active event screen, but it will still show in history as cancelled.",
-      [
-        { text: "Keep Fire", style: "cancel" },
-        {
-          text: "Cancel Fire",
-          style: "destructive",
-          onPress: async () => {
-            const { error } = await supabase
-              .from("events")
-              .update({ status: "cancelled" })
-              .eq("id", event.id);
-
-            if (error) {
-              alert(error.message);
-              return;
-            }
-
-            alert("Fire cancelled.");
-            setEvent(null);
-            setStatus("No upcoming fire found");
-            setMessage("");
-            clearFireForm();
-
-            await loadEvent();
-            await loadHostFireHistory();
-            if (showHistory) await refreshHistory();
-          },
-        },
-      ]
-    );
-  }
-
-  async function postAnnouncement() {
-    if (!isHost) return;
-
-    if (!announcementMessage.trim()) {
-      alert("Please enter an announcement.");
-      return;
-    }
-
-    const yesRsvps =
-      event?.rsvps?.filter((r: any) => r.response_status === "going") || [];
-
-    const { error: clearError } = await supabase
-      .from("announcements")
-      .update({ is_active: false })
-      .eq("is_active", true);
-
-    if (clearError) {
-      alert(clearError.message);
-      return;
-    }
-
-    const { data: newAnnouncement, error } = await supabase
-      .from("announcements")
-      .insert({
-        message: announcementMessage.trim(),
-        is_active: true,
-      })
-      .select("*")
-      .single();
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    if (yesRsvps.length > 0 && event?.id) {
-      const recipientsToInsert = yesRsvps.map((person: any) => ({
-        announcement_id: newAnnouncement.id,
-        event_id: event.id,
-        name: getDisplayName(person),
-        first_name: person.first_name || null,
-        last_name: person.last_name || null,
-        response_status: person.response_status,
-      }));
-
-      const { error: recipientsError } = await supabase
-        .from("announcement_recipients")
-        .insert(recipientsToInsert);
-
-      if (recipientsError) {
-        alert(recipientsError.message);
-        return;
-      }
-    }
-
-    alert(
-      yesRsvps.length > 0
-        ? `Announcement posted and added to ${yesRsvps.length} recipient(s).`
-        : "Announcement posted. No RSVP Yes recipients found."
-    );
-
-    setAnnouncementMessage("");
-    setAnnouncement(newAnnouncement);
-    await loadAnnouncementRecipients(newAnnouncement.id);
-    await loadAnnouncementHistory();
-  }
-
-  async function clearAnnouncement() {
-    if (!isHost || !announcement?.id) return;
-
-    Alert.alert("Clear Announcement?", "This will remove it from the main screen.", [
-      { text: "Keep It", style: "cancel" },
-      {
-        text: "Clear",
-        style: "destructive",
-        onPress: async () => {
-          const { error } = await supabase
-            .from("announcements")
-            .update({ is_active: false })
-            .eq("id", announcement.id);
-
-          if (error) {
-            alert(error.message);
-            return;
-          }
-
-          alert("Announcement cleared.");
-          setAnnouncement(null);
-          setAnnouncementRecipients([]);
-          await loadAnnouncementHistory();
-        },
-      },
-    ]);
-  }
-
-  async function reactivateAnnouncement(item: any) {
-    if (!isHost || !item?.id) return;
-
-    const { error: clearError } = await supabase
-      .from("announcements")
-      .update({ is_active: false })
-      .eq("is_active", true);
-
-    if (clearError) {
-      alert(clearError.message);
-      return;
-    }
-
-    const { error } = await supabase
-      .from("announcements")
-      .update({ is_active: true })
-      .eq("id", item.id);
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    alert("Announcement reactivated.");
-    await loadAnnouncement();
-    await loadAnnouncementHistory();
   }
 
   async function loadApprovedGuests() {
@@ -817,102 +662,60 @@ useFocusEffect(
     setApprovedGuests(data ?? []);
   }
 
-  async function addApprovedGuest() {
-    const cleanFirstName = newGuestFirstName.trim();
-    const cleanLastName = newGuestLastName.trim();
+  function RSVPButton({
+  label,
+  activeLabel,
+  active,
+  color,
+  textColor,
+  onPress,
+}: {
+  label: string;
+  activeLabel: string;
+  active: boolean;
+  color: string;
+  textColor: string;
+  onPress: () => void;
+}) {
+  const scale = useSharedValue(1);
 
-    if (!cleanFirstName || !cleanLastName) {
-      alert("Please enter the guest's first and last name.");
-      return;
-    }
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
 
-    const { data: existingGuest, error: lookupError } = await supabase
-      .from("approved_users")
-      .select("*")
-      .ilike("first_name", cleanFirstName)
-      .ilike("last_name", cleanLastName)
-      .maybeSingle();
 
-    if (lookupError) {
-      alert(lookupError.message);
-      return;
-    }
-
-    if (existingGuest) {
-      const { error } = await supabase
-        .from("approved_users")
-        .update({ access_status: "active" })
-        .eq("id", existingGuest.id);
-
-      if (error) {
-        alert(error.message);
-        return;
-      }
-    } else {
-      const { error } = await supabase.from("approved_users").insert({
-        first_name: cleanFirstName,
-        last_name: cleanLastName,
-        access_status: "active",
-      });
-
-      if (error) {
-        alert(error.message);
-        return;
-      }
-    }
-
-    alert(`${cleanFirstName} ${cleanLastName} is approved.`);
-    setNewGuestFirstName("");
-    setNewGuestLastName("");
-    loadApprovedGuests();
-  }
-
-  async function deactivateGuest(guest: any) {
-    if (!isHost || !guest?.id) return;
-
-    Alert.alert(
-      "Deactivate Guest?",
-      `Remove access for ${guest.first_name} ${guest.last_name}?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Deactivate",
-          style: "destructive",
-          onPress: async () => {
-            const { error } = await supabase
-              .from("approved_users")
-              .update({ access_status: "inactive" })
-              .eq("id", guest.id);
-
-            if (error) {
-              alert(error.message);
-              return;
-            }
-
-            alert(`${guest.first_name} ${guest.last_name} has been deactivated.`);
-            loadApprovedGuests();
+  return (
+    <Animated.View style={animatedStyle}>
+      <Pressable
+        onPressIn={() => {
+          scale.value = withSpring(0.96);
+        }}
+        onPressOut={() => {
+          scale.value = withSpring(1);
+        }}
+        onPress={onPress}
+        style={[
+          styles.rsvpButton,
+          {
+            backgroundColor: active ? color : "#232326",
+            borderColor: active ? color : "#2f2f35",
           },
-        },
-      ]
-    );
-  }
-
-  async function reactivateGuest(guest: any) {
-    if (!isHost || !guest?.id) return;
-
-    const { error } = await supabase
-      .from("approved_users")
-      .update({ access_status: "active" })
-      .eq("id", guest.id);
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    alert(`${guest.first_name} ${guest.last_name} has been reactivated.`);
-    loadApprovedGuests();
-  }
+        ]}
+      >
+        <Text
+          style={[
+            styles.rsvpButtonText,
+            {
+              color: active ? textColor : "#fff",
+            },
+          ]}
+        >
+          {active ? activeLabel : label}
+        </Text>
+      </Pressable>
+    </Animated.View>
+  );
+}
 
   function FilterButton({
     label,
@@ -926,16 +729,13 @@ useFocusEffect(
     return (
       <Pressable
         onPress={onPress}
-        style={{
-          marginRight: 8,
-          marginTop: 8,
-          backgroundColor: active ? "#f97316" : "#232326",
-          paddingVertical: 8,
-          paddingHorizontal: 12,
-          borderRadius: 8,
-          borderWidth: 1,
-          borderColor: active ? "#f97316" : "#2f2f35",
-        }}
+        style={[
+          styles.filterButton,
+          {
+            backgroundColor: active ? "#f97316" : "#232326",
+            borderColor: active ? "#f97316" : "#2f2f35",
+          },
+        ]}
       >
         <Text style={{ color: active ? "#111" : "#fff", fontWeight: "700" }}>
           {label}
@@ -943,519 +743,244 @@ useFocusEffect(
       </Pressable>
     );
   }
+function SkeletonCard() {
+  const opacity = useSharedValue(0.4);
 
-  function SectionHeader({
-    title,
-    open,
-    onPress,
-  }: {
-    title: string;
-    open: boolean;
-    onPress: () => void;
-  }) {
-    return (
-      <Pressable
-        onPress={onPress}
-        style={{
-          marginTop: 12,
-          backgroundColor: "#232326",
-          paddingVertical: 12,
-          paddingHorizontal: 14,
-          borderRadius: 10,
+  useEffect(() => {
+    opacity.value = withRepeat(
+      withTiming(0.8, { duration: 900 }),
+      -1,
+      true
+    );
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+  }));
+
+  return (
+    <Animated.View
+      style={[
+        {
+          width: "100%",
+          backgroundColor: "#18181b",
+          borderRadius: 22,
+          padding: 20,
           borderWidth: 1,
-          borderColor: open ? "#f97316" : "#2f2f35",
-        }}
-      >
-        <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>
-          {open ? "▼" : "▶"} {title}
+          borderColor: "#2f2f35",
+          marginTop: 8,
+          height: 280,
+        },
+        animatedStyle,
+      ]}
+    />
+  );
+}
+
+  return (
+    <ScrollView contentContainerStyle={styles.screen}>
+      <View style={styles.header}>
+        <Text style={styles.appTitle}>🔥 Yabs Fire Nite</Text>
+        <Text style={styles.subtitle}>
+          {event
+            ? "The next fire is locked in."
+            : announcement
+            ? "Latest host update"
+            : "No fire scheduled right now."}
         </Text>
-      </Pressable>
-    );
-  }
+      </View>
 
-  function renderReminderRecipients() {
-    if (!isHost) return null;
+      <Animated.View
+  entering={FadeInUp.duration(500)}
+  style={styles.heroCard}
+>
+        <Text style={styles.heroLabel}>
+          {event ? "NEXT FIRE" : announcement ? "ANNOUNCEMENT" : "STATUS"}
+        </Text>
 
-    const tomorrowList = dedupePeople(
-      reminderRecipients.filter((person: any) => person.reminder_type === "tomorrow")
-    );
-    const twoHourList = dedupePeople(
-      reminderRecipients.filter((person: any) => person.reminder_type === "two_hour")
-    );
+        <Text style={styles.heroTitle}>
+          {event ? status : announcement ? "Fire Announcement" : status}
+        </Text>
 
-    function renderList(title: string, list: any[]) {
-      return (
-        <View
-          style={{
-            marginTop: 12,
-            backgroundColor: "#232326",
-            padding: 10,
-            borderRadius: 10,
-            borderWidth: 1,
-            borderColor: "#2f2f35",
-          }}
-        >
-          <Text style={{ color: "#fff", fontWeight: "700" }}>
-            {title}: {list.length}
+        {event && (
+          <Text style={styles.heroDate}>
+            {formatFireDateTime(event.event_date, event.event_time)}
           </Text>
+        )}
 
-          {list.length === 0 ? (
-            <Text style={{ color: "#b3b3ba", marginTop: 5 }}>
-              No recipients added yet.
-            </Text>
+        <Text style={styles.heroMessage}>
+          {event
+            ? message || "No message for this fire."
+            : announcement
+            ? announcement.message
+            : "Check back soon."}
+        </Text>
+
+        {event && (
+          <View style={styles.statsRow}>
+            <View style={styles.statBox}>
+              <Text style={styles.statNumber}>{goingCount}</Text>
+              <Text style={styles.statLabel}>Coming</Text>
+            </View>
+
+            <View style={styles.statBox}>
+              <Text style={styles.statNumber}>{maybeCount}</Text>
+              <Text style={styles.statLabel}>Maybe</Text>
+            </View>
+
+            <View style={styles.statBox}>
+              <Text style={styles.statNumber}>{notGoingCount}</Text>
+              <Text style={styles.statLabel}>Not Coming</Text>
+            </View>
+
+            <View style={styles.statBox}>
+              <Text style={styles.statNumber}>{notRespondedList.length}</Text>
+              <Text style={styles.statLabel}>No Reply</Text>
+            </View>
+        </View>
+        )}
+
+        {event && isApproved && !isHost && (
+          <View style={styles.rsvpArea}>
+            <RSVPButton
+              label="Yes — I’m Coming"
+              activeLabel="You're In 🔥"
+              active={myRSVP === "going"}
+              color="#22c55e"
+              textColor="#07130b"
+              onPress={() => handleRSVP("going")}
+            />
+
+            <RSVPButton
+              label="Maybe"
+              activeLabel="Marked Maybe"
+              active={myRSVP === "maybe"}
+              color="#facc15"
+              textColor="#1c1600"
+              onPress={() => handleRSVP("maybe")}
+            />
+
+            <RSVPButton
+              label="No — I’m Not Coming"
+              activeLabel="Marked Not Coming"
+              active={myRSVP === "not_going"}
+              color="#ef4444"
+              textColor="#1a0505"
+              onPress={() => handleRSVP("not_going")}
+            />
+          </View>
+        )}
+      </Animated.View>
+
+      {event && (
+        <View style={styles.listCard}>
+          <Text style={styles.sectionTitle}>Guest List</Text>
+
+          <Text style={styles.listHeadingGreen}>Coming</Text>
+          {currentGoingList.length === 0 ? (
+            <Text style={styles.emptyText}>No yes responses yet.</Text>
           ) : (
-            list.map((person: any) => (
-              <Text key={person.id} style={{ color: "#b3b3ba", marginTop: 4 }}>
-                • {getDisplayName(person)}
+            currentGoingList.map((r: any) => (
+              <Text key={r.id} style={styles.guestName}>
+                • {getDisplayName(r)}
               </Text>
             ))
           )}
-        </View>
-      );
-    }
 
-    return (
-      <View style={{ marginTop: 12 }}>
-        {renderList("Tomorrow Reminder List", tomorrowList)}
-        {renderList("2 Hour Reminder List", twoHourList)}
-      </View>
-    );
-  }
+          <Text style={styles.listHeadingYellow}>Maybe</Text>
+          {maybeList.length === 0 ? (
+            <Text style={styles.emptyText}>No maybe responses yet.</Text>
+          ) : (
+            maybeList.map((r: any) => (
+              <Text key={r.id} style={styles.guestName}>
+                • {getDisplayName(r)}
+              </Text>
+            ))
+          )}
 
-  function renderAnnouncementRecipients() {
-    if (!isHost) return null;
+          <Text style={styles.listHeadingRed}>Not Coming</Text>
+          {notGoingList.length === 0 ? (
+            <Text style={styles.emptyText}>No no responses yet.</Text>
+          ) : (
+            notGoingList.map((r: any) => (
+              <Text key={r.id} style={styles.guestName}>
+                • {getDisplayName(r)}
+              </Text>
+            ))
+          )}
 
-    return (
-      <View
-        style={{
-          marginTop: 12,
-          backgroundColor: "#232326",
-          padding: 10,
-          borderRadius: 10,
-          borderWidth: 1,
-          borderColor: "#2f2f35",
-        }}
-      >
-        <Text style={{ color: "#fff", fontWeight: "700" }}>
-          Sent To: {announcementRecipients.length}
-        </Text>
-
-        {announcementRecipients.length === 0 ? (
-          <Text style={{ color: "#b3b3ba", marginTop: 5 }}>No recipients yet.</Text>
-        ) : (
-          announcementRecipients.map((person: any) => (
-            <Text key={person.id} style={{ color: "#b3b3ba", marginTop: 4 }}>
-              • {getDisplayName(person)}
-            </Text>
-          ))
-        )}
-      </View>
-    );
-  }
-
-  function renderAnnouncementHistory() {
-    if (!isHost) return null;
-
-    return (
-      <View style={{ marginTop: 15 }}>
-        <Text style={{ color: "#fff", fontSize: 18, fontWeight: "700" }}>
-          Announcement History
-        </Text>
-
-        <Pressable
-          onPress={loadAnnouncementHistory}
-          style={{
-            marginTop: 10,
-            backgroundColor: "#232326",
-            paddingVertical: 10,
-            paddingHorizontal: 20,
-            borderRadius: 10,
-            borderWidth: 1,
-            borderColor: "#2f2f35",
-          }}
-        >
-          <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>
-            Refresh Announcement History
-          </Text>
-        </Pressable>
-
-        {announcementHistory.length === 0 ? (
-          <Text style={{ color: "#b3b3ba", marginTop: 10 }}>No announcements yet.</Text>
-        ) : (
-          announcementHistory.map((item: any) => {
-            const isExpanded = expandedAnnouncementId === item.id;
-            const recipients = item.announcement_recipients || [];
-
-            return (
-              <View
-                key={item.id}
-                style={{
-                  marginTop: 10,
-                  padding: 10,
-                  backgroundColor: "#232326",
-                  borderRadius: 10,
-                  borderWidth: 1,
-                  borderColor: item.is_active ? "#f97316" : "#2f2f35",
-                }}
-              >
-                <Pressable
-                  onPress={() =>
-                    setExpandedAnnouncementId(isExpanded ? null : item.id)
-                  }
-                >
-                  <Text style={{ color: "#fff", fontWeight: "700" }}>
-                    {item.message}
+          {isHost && (
+            <>
+              <Text style={styles.listHeadingYellow}>Hasn’t Responded</Text>
+              {notRespondedList.length === 0 ? (
+                <Text style={styles.emptyText}>Everyone has responded.</Text>
+              ) : (
+                notRespondedList.map((person: any) => (
+                  <Text key={person.id} style={styles.guestName}>
+                    • {getDisplayName(person)}
                   </Text>
-
-                  <Text
-                    style={{
-                      color: item.is_active ? "#f97316" : "#b3b3ba",
-                      marginTop: 5,
-                    }}
-                  >
-                    Status: {item.is_active ? "Active" : "Inactive"}
-                  </Text>
-
-                  <Text style={{ color: "#b3b3ba", marginTop: 3 }}>
-                    Posted: {new Date(item.created_at).toLocaleString()}
-                  </Text>
-
-                  <Text style={{ color: "#b3b3ba", marginTop: 3 }}>
-                    Sent To: {recipients.length}
-                  </Text>
-
-                  <Text style={{ color: "#f97316", marginTop: 5 }}>
-                    {isExpanded ? "Hide Recipients" : "View Recipients"}
-                  </Text>
-                </Pressable>
-
-                {isExpanded && (
-                  <View style={{ marginTop: 10 }}>
-                    {recipients.length === 0 ? (
-                      <Text style={{ color: "#b3b3ba" }}>
-                        No recipients saved for this announcement.
-                      </Text>
-                    ) : (
-                      recipients.map((person: any) => (
-                        <Text key={person.id} style={{ color: "#b3b3ba", marginTop: 4 }}>
-                          • {getDisplayName(person)}
-                        </Text>
-                      ))
-                    )}
-
-                    {!item.is_active && (
-                      <Pressable
-                        onPress={() => reactivateAnnouncement(item)}
-                        style={{
-                          marginTop: 10,
-                          backgroundColor: "#f97316",
-                          paddingVertical: 10,
-                          paddingHorizontal: 20,
-                          borderRadius: 10,
-                        }}
-                      >
-                        <Text
-                          style={{
-                            color: "#111",
-                            fontWeight: "700",
-                            textAlign: "center",
-                          }}
-                        >
-                          Reactivate Announcement
-                        </Text>
-                      </Pressable>
-                    )}
-                  </View>
-                )}
-              </View>
-            );
-          })
-        )}
-      </View>
-    );
-  }
-
-  function renderHostFireHistory() {
-    if (!isHost) return null;
-
-    return (
-      <View style={{ marginTop: 15 }}>
-        <Text style={{ color: "#fff", fontSize: 18, fontWeight: "700" }}>
-          Host Fire History
-        </Text>
-
-        <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 4 }}>
-          <FilterButton
-            label="All"
-            active={fireHistoryFilter === "all"}
-            onPress={() => setFireHistoryFilter("all")}
-          />
-          <FilterButton
-            label="Active"
-            active={fireHistoryFilter === "active"}
-            onPress={() => setFireHistoryFilter("active")}
-          />
-          <FilterButton
-            label="Cancelled"
-            active={fireHistoryFilter === "cancelled"}
-            onPress={() => setFireHistoryFilter("cancelled")}
-          />
-        </View>
-
-        <Pressable
-          onPress={loadHostFireHistory}
-          style={{
-            marginTop: 10,
-            backgroundColor: "#232326",
-            paddingVertical: 10,
-            paddingHorizontal: 20,
-            borderRadius: 10,
-            borderWidth: 1,
-            borderColor: "#2f2f35",
-          }}
-        >
-          <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>
-            Refresh Fire History
-          </Text>
-        </Pressable>
-
-        {filteredFireHistory.length === 0 ? (
-          <Text style={{ color: "#b3b3ba", marginTop: 10 }}>
-            No fires match this filter.
-          </Text>
-        ) : (
-          filteredFireHistory.map((fire: any) => {
-            const yesList = dedupePeople(
-              fire.rsvps?.filter((r: any) => r.response_status === "going") || []
-            );
-            const noList = dedupePeople(
-              fire.rsvps?.filter((r: any) => r.response_status === "not_going") || []
-            );
-            const isExpanded = expandedFireId === fire.id;
-
-            return (
-              <View
-                key={fire.id}
-                style={{
-                  marginTop: 10,
-                  padding: 10,
-                  backgroundColor: "#232326",
-                  borderRadius: 10,
-                  borderWidth: 1,
-                  borderColor:
-                    fire.status === "cancelled" ? "#7f1d1d" : "#2f2f35",
-                }}
-              >
-                <Pressable
-                  onPress={() => setExpandedFireId(isExpanded ? null : fire.id)}
-                >
-                  <Text style={{ color: "#fff", fontWeight: "700" }}>
-                    {fire.event_date ? formatDisplayDate(fire.event_date) : "No date"}{" "}
-                    {fire.event_time ? `at ${fire.event_time}` : ""}
-                  </Text>
-
-                  <Text
-                    style={{
-                      color:
-                        fire.status === "cancelled" ? "#ef4444" : "#b3b3ba",
-                      marginTop: 3,
-                    }}
-                  >
-                    Status: {fire.status}
-                  </Text>
-
-                  <Text style={{ color: "#b3b3ba", marginTop: 3 }}>
-                    Yes: {yesList.length} | No: {noList.length}
-                  </Text>
-
-                  {fire.message ? (
-                    <Text style={{ color: "#b3b3ba", marginTop: 3 }}>
-                      Message: {fire.message}
-                    </Text>
-                  ) : null}
-
-                  <Text style={{ color: "#f97316", marginTop: 5 }}>
-                    {isExpanded ? "Hide RSVPs" : "View RSVPs"}
-                  </Text>
-                </Pressable>
-
-                {isExpanded && (
-                  <View style={{ marginTop: 12 }}>
-                    <Text style={{ color: "#22c55e", fontWeight: "700" }}>
-                      Yes — Coming
-                    </Text>
-
-                    {yesList.length === 0 ? (
-                      <Text style={{ color: "#b3b3ba", marginTop: 4 }}>
-                        No yes responses.
-                      </Text>
-                    ) : (
-                      yesList.map((person: any) => (
-                        <Text key={person.id} style={{ color: "#b3b3ba", marginTop: 4 }}>
-                          • {getDisplayName(person)}
-                        </Text>
-                      ))
-                    )}
-
-                    <Text
-                      style={{
-                        color: "#ef4444",
-                        fontWeight: "700",
-                        marginTop: 12,
-                      }}
-                    >
-                      No — Not Coming
-                    </Text>
-
-                    {noList.length === 0 ? (
-                      <Text style={{ color: "#b3b3ba", marginTop: 4 }}>
-                        No no responses.
-                      </Text>
-                    ) : (
-                      noList.map((person: any) => (
-                        <Text key={person.id} style={{ color: "#b3b3ba", marginTop: 4 }}>
-                          • {getDisplayName(person)}
-                        </Text>
-                      ))
-                    )}
-                  </View>
-                )}
-              </View>
-            );
-          })
-        )}
-      </View>
-    );
-  }
-
-  const mainTitle = event ? status : announcement ? "Fire Announcement" : status;
-  const mainMessage = event ? message : announcement ? announcement.message : message;
-
-  return (
-    <ScrollView
-      contentContainerStyle={{
-        flexGrow: 1,
-        backgroundColor: "#0f0f10",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
-      }}
-    >
-      <Text style={{ color: "#fff", fontSize: 28, fontWeight: "700" }}>
-        🔥 {mainTitle}
-      </Text>
-
-      <Text style={{ color: "#b3b3ba", marginTop: 10, textAlign: "center" }}>
-        {mainMessage}
-      </Text>
-
-      {!event && announcement && (
-        <View
-          style={{
-            marginTop: 15,
-            backgroundColor: "#232326",
-            padding: 12,
-            borderRadius: 10,
-            borderWidth: 1,
-            borderColor: "#f97316",
-            width: "90%",
-          }}
-        >
-          <Text style={{ color: "#f97316", fontWeight: "700", textAlign: "center" }}>
-            Host Update
-          </Text>
-          <Text style={{ color: "#fff", marginTop: 6, textAlign: "center" }}>
-            {announcement.message}
-          </Text>
+                ))
+              )}
+            </>
+          )}
         </View>
       )}
-
-      {event && (
-  <View style={{ marginTop: 15 }}>
-    <Text style={{ color: "#fff", fontWeight: "700", marginBottom: 5 }}>
-      RSVP Summary
-    </Text>
-
-    <Text style={{ color: "#22c55e" }}>Yes: {goingCount}</Text>
-    <Text style={{ color: "#ef4444", marginBottom: 8 }}>
-      No: {notGoingCount}
-    </Text>
-
-    <Text style={{ color: "#22c55e", fontWeight: "700", marginTop: 10 }}>
-      Who’s Coming
-    </Text>
-    {currentGoingList.length === 0 ? (
-      <Text style={{ color: "#b3b3ba" }}>No yes responses yet.</Text>
-    ) : (
-      currentGoingList.map((r: any) => (
-        <Text key={r.id} style={{ color: "#b3b3ba" }}>
-          • {getDisplayName(r)}
+{event && savedFirstName && savedLastName && isApproved && (
+  <View style={styles.chatCard}>
+  
+<Text style={styles.chatHint}>Scroll inside chat to view older messages</Text>
+<ScrollView
+  ref={chatScrollRef}
+  style={{ maxHeight: 300 }}
+  nestedScrollEnabled={true}
+  keyboardShouldPersistTaps="handled"
+  onContentSizeChange={() => {
+  if (chatMessages.length > 0) {
+    setTimeout(() => {
+      chatScrollRef.current?.scrollToEnd({ animated: true });
+    }, 100);
+  }
+}}
+>
+  {chatMessages.length === 0 ? (
+    <Text style={styles.emptyText}>No messages yet. Start the chat.</Text>
+  ) : (
+    chatMessages.map((chat: any) => (
+      <View key={chat.id} style={styles.chatMessage}>
+        <Text style={styles.chatName}>
+          {chat.first_name} {chat.last_name}
         </Text>
-      ))
-    )}
+        <Text style={styles.chatText}>{chat.message}</Text>
+      </View>
+    ))
+  )}
+</ScrollView>
 
-    <Text style={{ color: "#ef4444", fontWeight: "700", marginTop: 12 }}>
-      Who’s Not Coming
-    </Text>
-    {notGoingList.length === 0 ? (
-      <Text style={{ color: "#b3b3ba" }}>No no responses yet.</Text>
-    ) : (
-      notGoingList.map((r: any) => (
-        <Text key={r.id} style={{ color: "#b3b3ba" }}>
-          • {getDisplayName(r)}
-        </Text>
-      ))
-    )}
+    <TextInput
+      placeholder="Send a message..."
+      placeholderTextColor="#888"
+      value={chatInput}
+      onChangeText={setChatInput}
+      style={styles.chatInput}
+      maxLength={200}
+    />
+
+    <Pressable onPress={sendChatMessage} style={styles.primaryButton}>
+      <Text style={styles.primaryButtonText}>Send Message</Text>
+    </Pressable>
   </View>
 )}
-<View style={{ marginTop: 12, alignItems: "center" }}>
-  <Text
-    style={{
-      color: "#facc15",
-      fontWeight: "700",
-      textAlign: "center",
-    }}
-  >
-    Hasn’t Responded
-  </Text>
-
-  <View style={{ marginTop: 4, alignSelf: "flex-start" }}>
-    {notRespondedList.length === 0 ? (
-      <Text style={{ color: "#b3b3ba" }}>
-        Everyone has responded.
-      </Text>
-    ) : (
-      notRespondedList.map((person: any) => (
-        <Text
-          key={person.id}
-          style={{
-            color: "#b3b3ba",
-            marginTop: 4,
-          }}
-        >
-          • {getDisplayName(person)}
-        </Text>
-      ))
-    )}
-  </View>
-</View>
 
       {!savedFirstName || !savedLastName ? (
-        <>
+        <View style={styles.mainCard}>
+          <Text style={styles.cardLabel}>Your Info</Text>
+
           <TextInput
             placeholder="First name"
             placeholderTextColor="#888"
             value={firstName}
             onChangeText={setFirstName}
-            style={{
-              marginTop: 20,
-              backgroundColor: "#232326",
-              color: "#fff",
-              padding: 10,
-              borderRadius: 8,
-              width: "80%",
-              textAlign: "center",
-            }}
+            style={styles.nameInput}
           />
 
           <TextInput
@@ -1463,633 +988,48 @@ useFocusEffect(
             placeholderTextColor="#888"
             value={lastName}
             onChangeText={setLastName}
-            style={{
-              marginTop: 10,
-              backgroundColor: "#232326",
-              color: "#fff",
-              padding: 10,
-              borderRadius: 8,
-              width: "80%",
-              textAlign: "center",
-            }}
+            style={styles.nameInput}
           />
 
-          <Pressable
-            onPress={saveName}
-            style={{
-              marginTop: 10,
-              backgroundColor: "#f97316",
-              paddingVertical: 10,
-              paddingHorizontal: 20,
-              borderRadius: 10,
-            }}
-          >
-            <Text style={{ color: "#111", fontWeight: "700" }}>Save Name</Text>
+          <Pressable onPress={saveName} style={styles.primaryButton}>
+            <Text style={styles.primaryButtonText}>Continue</Text>
           </Pressable>
-        </>
+        </View>
       ) : (
         <>
-          <Text style={{ color: "#fff", marginTop: 15 }}>
-            Welcome, {savedFirstName} {savedLastName}
-          </Text>
+          <View style={styles.mainCard}>
+            <Text style={styles.cardLabel}>Your Account</Text>
 
-          {isHost && (
-            <Text style={{ color: "#22c55e", marginTop: 8 }}>
-              You are hosting this fire 🔥
+            <Text style={styles.accountName}>
+              {savedFirstName} {savedLastName}
             </Text>
-          )}
 
-          <Pressable
-            onPress={resetName}
-            style={{
-              marginTop: 10,
-              backgroundColor: "#232326",
-              paddingVertical: 10,
-              paddingHorizontal: 20,
-              borderRadius: 10,
-              borderWidth: 1,
-              borderColor: "#2f2f35",
-            }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "700" }}>Reset Name</Text>
-          </Pressable>
+            {isHost && (
+              <Text style={styles.hostAccess}>Host Access Enabled 🔥</Text>
+            )}
 
-          {isApproved && (
-            <Pressable
-              onPress={registerForPushNotifications}
-              style={{
-                marginTop: 10,
-                backgroundColor: "#232326",
-                paddingVertical: 10,
-                paddingHorizontal: 20,
-                borderRadius: 10,
-                borderWidth: 1,
-                borderColor: "#2f2f35",
-              }}
-            >
-              <Text style={{ color: "#fff", fontWeight: "700" }}>
-                Enable Notifications Disabled
+            <Pressable onPress={loadHistory} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>
+                {showHistory
+                  ? "Hide History"
+                  : isHost
+                  ? "View All History"
+                  : "View My History"}
               </Text>
             </Pressable>
-          )}
 
-          <Pressable
-            onPress={loadHistory}
-            style={{
-              marginTop: 10,
-              backgroundColor: "#232326",
-              paddingVertical: 10,
-              paddingHorizontal: 20,
-              borderRadius: 10,
-              borderWidth: 1,
-              borderColor: "#2f2f35",
-            }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "700" }}>
-              {showHistory
-                ? "Hide History"
-                : isHost
-                ? "View All History"
-                : "View My History"}
-            </Text>
-          </Pressable>
-
-          {isHost && (
-            <Pressable
-              onPress={() => setShowHostPanel(!showHostPanel)}
-              style={{
-                marginTop: 10,
-                backgroundColor: "#f97316",
-                paddingVertical: 10,
-                paddingHorizontal: 20,
-                borderRadius: 10,
-              }}
-            >
-              <Text style={{ color: "#111", fontWeight: "700" }}>
-                {showHostPanel ? "Hide Host Panel" : "Show Host Panel"}
-              </Text>
+            <Pressable onPress={resetName} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>Reset Name</Text>
             </Pressable>
-          )}
-
-          {isHost && showHostPanel && (
-            <View
-              style={{
-                marginTop: 20,
-                width: "90%",
-                backgroundColor: "#18181b",
-                padding: 15,
-                borderRadius: 12,
-                borderWidth: 1,
-                borderColor: "#2f2f35",
-              }}
-            >
-              <Text style={{ color: "#fff", fontSize: 18, fontWeight: "700" }}>
-                Host Panel
-              </Text>
-
-              <SectionHeader
-                title="Fire Controls"
-                open={showFireControls}
-                onPress={() => setShowFireControls(!showFireControls)}
-              />
-
-              {showFireControls && (
-                <View style={{ marginTop: 10 }}>
-                  {event && (
-                    <Pressable
-                      onPress={loadCurrentFireForEditing}
-                      style={{
-                        backgroundColor: "#232326",
-                        paddingVertical: 12,
-                        paddingHorizontal: 20,
-                        borderRadius: 10,
-                        borderWidth: 1,
-                        borderColor: "#f97316",
-                      }}
-                    >
-                      <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>
-                        Load Current Fire for Editing
-                      </Text>
-                    </Pressable>
-                  )}
-
-                  {isEditingFire && (
-                    <Text style={{ color: "#22c55e", marginTop: 10, textAlign: "center" }}>
-                      Editing current fire
-                    </Text>
-                  )}
-
-                  <Pressable
-                    onPress={() => setShowDatePicker(true)}
-                    style={{
-                      marginTop: 10,
-                      backgroundColor: "#232326",
-                      padding: 12,
-                      borderRadius: 8,
-                    }}
-                  >
-                    <Text style={{ color: "#fff", textAlign: "center" }}>
-                      {newEventDate
-                        ? `Date: ${formatDisplayDate(newEventDate)}`
-                        : "Choose Date"}
-                    </Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() => setShowTimePicker(true)}
-                    style={{
-                      marginTop: 10,
-                      backgroundColor: "#232326",
-                      padding: 12,
-                      borderRadius: 8,
-                    }}
-                  >
-                    <Text style={{ color: "#fff", textAlign: "center" }}>
-                      {newEventTime ? `Time: ${newEventTime}` : "Choose Time"}
-                    </Text>
-                  </Pressable>
-
-                  {showDatePicker && (
-                    <DateTimePicker
-                      value={
-                        newEventDate
-                          ? new Date(`${newEventDate}T00:00:00`)
-                          : new Date()
-                      }
-                      mode="date"
-                      display={Platform.OS === "ios" ? "spinner" : "default"}
-                      onChange={(pickerEvent, selectedDate) => {
-                        setShowDatePicker(false);
-                        if (selectedDate) {
-                          setNewEventDate(formatDateForDatabase(selectedDate));
-                        }
-                      }}
-                    />
-                  )}
-
-                  {showTimePicker && (
-                    <DateTimePicker
-                      value={new Date()}
-                      mode="time"
-                      display={Platform.OS === "ios" ? "spinner" : "default"}
-                      onChange={(pickerEvent, selectedTime) => {
-                        setShowTimePicker(false);
-                        if (selectedTime) {
-                          setNewEventTime(formatTimeForDatabase(selectedTime));
-                        }
-                      }}
-                    />
-                  )}
-
-                  <TextInput
-                    placeholder="Message optional"
-                    placeholderTextColor="#888"
-                    value={newEventMessage}
-                    onChangeText={setNewEventMessage}
-                    style={{
-                      marginTop: 10,
-                      backgroundColor: "#232326",
-                      color: "#fff",
-                      padding: 10,
-                      borderRadius: 8,
-                    }}
-                  />
-
-                  {isEditingFire ? (
-                    <>
-                      <Pressable
-                        onPress={saveFireChanges}
-                        style={{
-                          marginTop: 10,
-                          backgroundColor: "#22c55e",
-                          paddingVertical: 12,
-                          paddingHorizontal: 20,
-                          borderRadius: 10,
-                        }}
-                      >
-                        <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                          Save Fire Changes
-                        </Text>
-                      </Pressable>
-
-                      <Pressable
-                        onPress={clearFireForm}
-                        style={{
-                          marginTop: 10,
-                          backgroundColor: "#232326",
-                          paddingVertical: 12,
-                          paddingHorizontal: 20,
-                          borderRadius: 10,
-                          borderWidth: 1,
-                          borderColor: "#2f2f35",
-                        }}
-                      >
-                        <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>
-                          Cancel Editing
-                        </Text>
-                      </Pressable>
-                    </>
-                  ) : (
-                    <Pressable
-                      onPress={createNewEvent}
-                      style={{
-                        marginTop: 10,
-                        backgroundColor: "#f97316",
-                        paddingVertical: 12,
-                        paddingHorizontal: 20,
-                        borderRadius: 10,
-                      }}
-                    >
-                      <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                        Create / Publish Fire 🔥
-                      </Text>
-                    </Pressable>
-                  )}
-
-                  {event && (
-                    <Pressable
-                      onPress={cancelCurrentEvent}
-                      style={{
-                        marginTop: 10,
-                        backgroundColor: "#7f1d1d",
-                        paddingVertical: 12,
-                        paddingHorizontal: 20,
-                        borderRadius: 10,
-                      }}
-                    >
-                      <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>
-                        Cancel Current Fire
-                      </Text>
-                    </Pressable>
-                  )}
-                </View>
-              )}
-
-              <SectionHeader
-                title="Announcements"
-                open={showAnnouncementsSection}
-                onPress={() => setShowAnnouncementsSection(!showAnnouncementsSection)}
-              />
-
-              {showAnnouncementsSection && (
-                <View style={{ marginTop: 10 }}>
-                  <TextInput
-                    placeholder="No fire this week, cancelled because of weather, pushing to Saturday..."
-                    placeholderTextColor="#888"
-                    value={announcementMessage}
-                    onChangeText={setAnnouncementMessage}
-                    multiline
-                    style={{
-                      backgroundColor: "#232326",
-                      color: "#fff",
-                      padding: 10,
-                      borderRadius: 8,
-                      minHeight: 80,
-                      textAlignVertical: "top",
-                    }}
-                  />
-
-                  <Pressable
-                    onPress={postAnnouncement}
-                    style={{
-                      marginTop: 10,
-                      backgroundColor: "#f97316",
-                      paddingVertical: 12,
-                      paddingHorizontal: 20,
-                      borderRadius: 10,
-                    }}
-                  >
-                    <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                      Post Announcement
-                    </Text>
-                  </Pressable>
-
-                  {announcement && (
-                    <>
-                      <Pressable
-                        onPress={clearAnnouncement}
-                        style={{
-                          marginTop: 10,
-                          backgroundColor: "#7f1d1d",
-                          paddingVertical: 12,
-                          paddingHorizontal: 20,
-                          borderRadius: 10,
-                        }}
-                      >
-                        <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>
-                          Clear Current Announcement
-                        </Text>
-                      </Pressable>
-
-                      {renderAnnouncementRecipients()}
-
-                      <Pressable
-                        onPress={sendAnnouncementPush}
-                        style={{
-                          marginTop: 10,
-                          backgroundColor: "#22c55e",
-                          paddingVertical: 12,
-                          paddingHorizontal: 20,
-                          borderRadius: 10,
-                        }}
-                      >
-                        <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                          Send Announcement Push Disabled
-                        </Text>
-                      </Pressable>
-                    </>
-                  )}
-
-                  {renderAnnouncementHistory()}
-                </View>
-              )}
-
-              <SectionHeader
-                title="Reminders"
-                open={showRemindersSection}
-                onPress={() => setShowRemindersSection(!showRemindersSection)}
-              />
-
-              {showRemindersSection && (
-                <View style={{ marginTop: 10 }}>
-                  <Text style={{ color: "#b3b3ba", textAlign: "center" }}>
-                    Build reminder lists from everyone who RSVP’d Yes for the current fire.
-                  </Text>
-
-                  <Pressable
-                    onPress={() => createReminderList("tomorrow")}
-                    style={{
-                      marginTop: 10,
-                      backgroundColor: "#f97316",
-                      paddingVertical: 12,
-                      paddingHorizontal: 20,
-                      borderRadius: 10,
-                    }}
-                  >
-                    <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                      Create Tomorrow Reminder List
-                    </Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() => createReminderList("two_hour")}
-                    style={{
-                      marginTop: 10,
-                      backgroundColor: "#f97316",
-                      paddingVertical: 12,
-                      paddingHorizontal: 20,
-                      borderRadius: 10,
-                    }}
-                  >
-                    <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                      Create 2 Hour Reminder List
-                    </Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() => sendReminderPush("tomorrow")}
-                    style={{
-                      marginTop: 10,
-                      backgroundColor: "#22c55e",
-                      paddingVertical: 12,
-                      paddingHorizontal: 20,
-                      borderRadius: 10,
-                    }}
-                  >
-                    <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                      Send Tomorrow Push Reminder Disabled
-                    </Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() => sendReminderPush("two_hour")}
-                    style={{
-                      marginTop: 10,
-                      backgroundColor: "#22c55e",
-                      paddingVertical: 12,
-                      paddingHorizontal: 20,
-                      borderRadius: 10,
-                    }}
-                  >
-                    <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                      Send 2 Hour Push Reminder Disabled
-                    </Text>
-                  </Pressable>
-
-                  {event ? (
-                    renderReminderRecipients()
-                  ) : (
-                    <Text style={{ color: "#b3b3ba", marginTop: 10, textAlign: "center" }}>
-                      No active fire found. Create or publish a fire before building reminders.
-                    </Text>
-                  )}
-                </View>
-              )}
-
-              <SectionHeader
-                title="Guests"
-                open={showGuestsSection}
-                onPress={() => setShowGuestsSection(!showGuestsSection)}
-              />
-
-              {showGuestsSection && (
-                <View style={{ marginTop: 10 }}>
-                  <TextInput
-                    placeholder="Guest first name"
-                    placeholderTextColor="#888"
-                    value={newGuestFirstName}
-                    onChangeText={setNewGuestFirstName}
-                    style={{
-                      backgroundColor: "#232326",
-                      color: "#fff",
-                      padding: 10,
-                      borderRadius: 8,
-                    }}
-                  />
-
-                  <TextInput
-                    placeholder="Guest last name"
-                    placeholderTextColor="#888"
-                    value={newGuestLastName}
-                    onChangeText={setNewGuestLastName}
-                    style={{
-                      marginTop: 10,
-                      backgroundColor: "#232326",
-                      color: "#fff",
-                      padding: 10,
-                      borderRadius: 8,
-                    }}
-                  />
-
-                  <Pressable
-                    onPress={addApprovedGuest}
-                    style={{
-                      marginTop: 10,
-                      backgroundColor: "#22c55e",
-                      paddingVertical: 12,
-                      paddingHorizontal: 20,
-                      borderRadius: 10,
-                    }}
-                  >
-                    <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                      Approve Guest
-                    </Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={loadApprovedGuests}
-                    style={{
-                      marginTop: 10,
-                      backgroundColor: "#232326",
-                      paddingVertical: 10,
-                      paddingHorizontal: 20,
-                      borderRadius: 10,
-                      borderWidth: 1,
-                      borderColor: "#2f2f35",
-                    }}
-                  >
-                    <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>
-                      Refresh Guest List
-                    </Text>
-                  </Pressable>
-
-                  <View style={{ marginTop: 15 }}>
-                    <Text style={{ color: "#fff", fontWeight: "700", marginBottom: 5 }}>
-                      Approved Guests: {approvedGuests.length}
-                    </Text>
-
-                    {approvedGuests.length === 0 ? (
-                      <Text style={{ color: "#b3b3ba" }}>No approved guests yet.</Text>
-                    ) : (
-                      approvedGuests.map((guest: any) => (
-                        <View
-                          key={guest.id}
-                          style={{
-                            marginTop: 10,
-                            padding: 10,
-                            backgroundColor: "#232326",
-                            borderRadius: 10,
-                            borderWidth: 1,
-                            borderColor: "#2f2f35",
-                          }}
-                        >
-                          <Text style={{ color: "#b3b3ba" }}>
-                            • {getDisplayName(guest)}
-                            {guest.access_status !== "active"
-                              ? ` (${guest.access_status})`
-                              : ""}
-                          </Text>
-
-                          {guest.access_status === "active" ? (
-                            <Pressable
-                              onPress={() => deactivateGuest(guest)}
-                              style={{
-                                marginTop: 8,
-                                backgroundColor: "#7f1d1d",
-                                paddingVertical: 8,
-                                paddingHorizontal: 12,
-                                borderRadius: 8,
-                              }}
-                            >
-                              <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>
-                                Deactivate Guest
-                              </Text>
-                            </Pressable>
-                          ) : (
-                            <Pressable
-                              onPress={() => reactivateGuest(guest)}
-                              style={{
-                                marginTop: 8,
-                                backgroundColor: "#22c55e",
-                                paddingVertical: 8,
-                                paddingHorizontal: 12,
-                                borderRadius: 8,
-                              }}
-                            >
-                              <Text style={{ color: "#111", fontWeight: "700", textAlign: "center" }}>
-                                Reactivate Guest
-                              </Text>
-                            </Pressable>
-                          )}
-                        </View>
-                      ))
-                    )}
-                  </View>
-                </View>
-              )}
-
-              <SectionHeader
-                title="Fire History"
-                open={showHostHistorySection}
-                onPress={() => setShowHostHistorySection(!showHostHistorySection)}
-              />
-
-              {showHostHistorySection && (
-  <FireHistory
-    isHost={isHost}
-    renderHostFireHistory={renderHostFireHistory}
-  />
-)}
-            </View>
-          )}
+          </View>
 
           {showHistory && (
-            <View
-              style={{
-                marginTop: 20,
-                width: "95%",
-                backgroundColor: "#18181b",
-                padding: 15,
-                borderRadius: 12,
-                borderWidth: 1,
-                borderColor: "#2f2f35",
-              }}
-            >
-              <Text style={{ color: "#fff", fontSize: 18, fontWeight: "700" }}>
+            <View style={styles.historyCard}>
+              <Text style={styles.historyTitle}>
                 {isHost ? "All Fire History" : "My Fire History"}
               </Text>
 
-              <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 6 }}>
+              <View style={styles.filterRow}>
                 <FilterButton
                   label="All"
                   active={historyFilter === "all"}
@@ -2101,67 +1041,53 @@ useFocusEffect(
                   onPress={() => setHistoryFilter("going")}
                 />
                 <FilterButton
+                  label="Maybe"
+                  active={historyFilter === "maybe"}
+                  onPress={() => setHistoryFilter("maybe")}
+                />
+                <FilterButton
                   label="Not Going"
                   active={historyFilter === "not_going"}
                   onPress={() => setHistoryFilter("not_going")}
                 />
               </View>
 
-              {filteredHistory.length === 0 ? (
-                <Text style={{ color: "#b3b3ba", marginTop: 10 }}>
-                  No history matches this filter.
-                </Text>
+              {displayHistory.length === 0 ? (
+                <Text style={styles.emptyText}>No history matches this filter.</Text>
               ) : (
-                filteredHistory.map((item) => (
-                  <View
-                    key={item.id}
-                    style={{
-                      marginTop: 10,
-                      padding: 10,
-                      backgroundColor: "#232326",
-                      borderRadius: 10,
-                      borderWidth: 1,
-                      borderColor:
-                        item.events?.status === "cancelled"
-                          ? "#7f1d1d"
-                          : "#2f2f35",
-                    }}
-                  >
-                    <Text style={{ color: "#fff", fontWeight: "700" }}>
-                      {getDisplayName(item)}
+                displayHistory.map((item: any) => (
+                  <View key={item.id} style={styles.historyItem}>
+                    <Text style={styles.historyName}>{getDisplayName(item)}</Text>
+
+                    <Text style={styles.historyText}>
+                      Response: {formatHistoryResponse(item.response_status)}
                     </Text>
 
-                    <Text style={{ color: "#b3b3ba", marginTop: 3 }}>
-                      Response:{" "}
-                      {item.response_status === "going"
-                        ? "Yes — Coming"
-                        : "No — Not Coming"}
-                    </Text>
-
-                    <Text style={{ color: "#b3b3ba", marginTop: 3 }}>
+                    <Text style={styles.historyText}>
                       Fire:{" "}
                       {item.events?.event_date
                         ? formatDisplayDate(item.events.event_date)
                         : ""}
-                      {item.events?.event_time ? ` at ${item.events.event_time}` : ""}
+                      {item.events?.event_time
+                        ? ` at ${formatTime(item.events.event_time)}`
+                        : ""}
                     </Text>
 
                     {item.events?.status && (
                       <Text
-                        style={{
-                          color:
-                            item.events.status === "cancelled"
-                              ? "#ef4444"
-                              : "#b3b3ba",
-                          marginTop: 3,
-                        }}
+                        style={[
+                          styles.historyText,
+                          item.events.status === "cancelled" && {
+                            color: "#ef4444",
+                          },
+                        ]}
                       >
                         Status: {item.events.status}
                       </Text>
                     )}
 
-                    <Text style={{ color: "#b3b3ba", marginTop: 3 }}>
-                      RSVP Date: {new Date(item.created_at).toLocaleString()}
+                    <Text style={styles.historyText}>
+                      RSVP Date: {formatRSVPDate(item.created_at)}
                     </Text>
                   </View>
                 ))
@@ -2169,60 +1095,8 @@ useFocusEffect(
             </View>
           )}
 
-          {event && isApproved && !isHost && (
-            <>
-              <Pressable
-                onPress={() => handleRSVP("going")}
-                style={{
-                  marginTop: 20,
-                  backgroundColor:
-                    myRSVP === "going" ? "#f97316" : "#232326",
-                  paddingVertical: 12,
-                  paddingHorizontal: 20,
-                  borderRadius: 10,
-                  borderWidth: 1,
-                  borderColor:
-                    myRSVP === "going" ? "#f97316" : "#2f2f35",
-                }}
-              >
-                <Text
-                  style={{
-                    color: myRSVP === "going" ? "#111" : "#fff",
-                    fontWeight: "700",
-                  }}
-                >
-                  Yes — I’m Coming
-                </Text>
-              </Pressable>
-
-              <Pressable
-                onPress={() => handleRSVP("not_going")}
-                style={{
-                  marginTop: 10,
-                  backgroundColor:
-                    myRSVP === "not_going" ? "#f97316" : "#232326",
-                  paddingVertical: 12,
-                  paddingHorizontal: 20,
-                  borderRadius: 10,
-                  borderWidth: 1,
-                  borderColor:
-                    myRSVP === "not_going" ? "#f97316" : "#2f2f35",
-                }}
-              >
-                <Text
-                  style={{
-                    color: myRSVP === "not_going" ? "#111" : "#fff",
-                    fontWeight: "700",
-                  }}
-                >
-                  No — I’m Not Coming
-                </Text>
-              </Pressable>
-            </>
-          )}
-
           {event && approvalChecked && !isApproved && (
-            <Text style={{ color: "#ef4444", marginTop: 20, textAlign: "center" }}>
+            <Text style={styles.notApprovedText}>
               You are not currently approved to access Yabs Fire Nite.
             </Text>
           )}
@@ -2231,3 +1105,294 @@ useFocusEffect(
     </ScrollView>
   );
 }
+
+const styles = StyleSheet.create({
+  screen: {
+    flexGrow: 1,
+    backgroundColor: "#0f0f10",
+    padding: 20,
+    paddingBottom: 40,
+    alignItems: "center",
+  },
+  header: {
+    width: "100%",
+    marginTop: 10,
+    marginBottom: 18,
+    alignItems: "center",
+  },
+  appTitle: {
+    color: "#fff",
+    fontSize: 30,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  subtitle: {
+    color: "#b3b3ba",
+    marginTop: 6,
+    fontSize: 15,
+    textAlign: "center",
+  },
+  heroCard: {
+    width: "100%",
+    backgroundColor: "#18181b",
+    borderRadius: 22,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: "#2f2f35",
+    marginTop: 8,
+  },
+  heroLabel: {
+    color: "#f97316",
+    fontWeight: "900",
+    marginBottom: 6,
+    letterSpacing: 1,
+    fontSize: 13,
+  },
+  heroTitle: {
+    color: "#fff",
+    fontSize: 22,
+    fontWeight: "900",
+    marginBottom: 8,
+  },
+  heroDate: {
+    color: "#fff",
+    fontSize: 26,
+    fontWeight: "900",
+    lineHeight: 34,
+  },
+  heroMessage: {
+    color: "#b3b3ba",
+    marginTop: 10,
+    marginBottom: 20,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  mainCard: {
+    width: "100%",
+    backgroundColor: "#18181b",
+    borderRadius: 18,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: "#2f2f35",
+    marginTop: 14,
+  },
+  cardLabel: {
+    color: "#f97316",
+    fontSize: 13,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    marginBottom: 8,
+  },
+  statsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  statBox: {
+    width: "48%",
+    backgroundColor: "#232326",
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#2f2f35",
+  },
+  statNumber: {
+    color: "#fff",
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  statLabel: {
+    color: "#b3b3ba",
+    marginTop: 3,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  rsvpArea: {
+    marginTop: 18,
+  },
+  rsvpButton: {
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 10,
+  },
+  rsvpButtonText: {
+    fontWeight: "900",
+    textAlign: "center",
+    fontSize: 15,
+  },
+  listCard: {
+    width: "100%",
+    marginTop: 14,
+    backgroundColor: "#18181b",
+    borderRadius: 18,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: "#2f2f35",
+  },
+  sectionTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "900",
+    marginBottom: 12,
+  },
+  listHeadingGreen: {
+    color: "#22c55e",
+    fontWeight: "900",
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  listHeadingRed: {
+    color: "#ef4444",
+    fontWeight: "900",
+    marginTop: 14,
+    marginBottom: 4,
+  },
+  listHeadingYellow: {
+    color: "#facc15",
+    fontWeight: "900",
+    marginTop: 14,
+    marginBottom: 4,
+  },
+  guestName: {
+    color: "#d4d4d8",
+    marginTop: 4,
+    fontSize: 15,
+  },
+  emptyText: {
+    color: "#8e8e95",
+    marginTop: 8,
+    fontSize: 14,
+  },
+  nameInput: {
+    marginTop: 10,
+    backgroundColor: "#232326",
+    color: "#fff",
+    padding: 12,
+    borderRadius: 10,
+    textAlign: "center",
+  },
+  primaryButton: {
+    marginTop: 12,
+    backgroundColor: "#f97316",
+    paddingVertical: 13,
+    borderRadius: 12,
+  },
+  primaryButtonText: {
+    color: "#111",
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  secondaryButton: {
+    marginTop: 10,
+    backgroundColor: "#232326",
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#2f2f35",
+  },
+  secondaryButtonText: {
+    color: "#fff",
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  accountName: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  hostAccess: {
+    color: "#22c55e",
+    marginTop: 6,
+    fontWeight: "800",
+  },
+  historyCard: {
+    marginTop: 20,
+    width: "100%",
+    backgroundColor: "#18181b",
+    padding: 15,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#2f2f35",
+  },
+  historyTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  filterRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginTop: 6,
+  },
+  filterButton: {
+    marginRight: 8,
+    marginTop: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  historyItem: {
+    marginTop: 10,
+    padding: 10,
+    backgroundColor: "#232326",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#2f2f35",
+  },
+  historyName: {
+    color: "#fff",
+    fontWeight: "800",
+  },
+  historyText: {
+    color: "#b3b3ba",
+    marginTop: 3,
+  },
+  notApprovedText: {
+    color: "#ef4444",
+    marginTop: 20,
+    textAlign: "center",
+  },
+  chatCard: {
+  width: "100%",
+  marginTop: 14,
+  backgroundColor: "#18181b",
+  borderRadius: 18,
+  padding: 18,
+  borderWidth: 1,
+  borderColor: "#2f2f35",
+},
+chatMessage: {
+  backgroundColor: "#232326",
+  borderRadius: 12,
+  padding: 10,
+  marginTop: 8,
+  borderWidth: 1,
+  borderColor: "#2f2f35",
+},
+chatName: {
+  color: "#f97316",
+  fontWeight: "800",
+  marginBottom: 4,
+},
+chatText: {
+  color: "#fff",
+  fontSize: 15,
+  lineHeight: 21,
+},
+chatInput: {
+  marginTop: 12,
+  backgroundColor: "#232326",
+  color: "#fff",
+  padding: 12,
+  borderRadius: 10,
+},
+chatHint: {
+  color: "#9ca3af",
+  fontSize: 12,
+  marginBottom: 8,
+},
+});
