@@ -26,18 +26,19 @@ export async function registerForPushNotificationsAsync() {
     });
   }
 
-const existingPermission: any = await Notifications.getPermissionsAsync();
-let finalStatus = existingPermission.status ?? existingPermission.granted;
+  const existingPermission: any = await Notifications.getPermissionsAsync();
+  let finalStatus = existingPermission.status ?? existingPermission.granted;
 
-if (finalStatus !== "granted" && finalStatus !== true) {
-  const requestedPermission: any = await Notifications.requestPermissionsAsync();
-  finalStatus = requestedPermission.status ?? requestedPermission.granted;
-}
+  if (finalStatus !== "granted" && finalStatus !== true) {
+    const requestedPermission: any =
+      await Notifications.requestPermissionsAsync();
+    finalStatus = requestedPermission.status ?? requestedPermission.granted;
+  }
 
-if (finalStatus !== "granted" && finalStatus !== true) {
-  console.log("Notification permission not granted.");
-  return null;
-}
+  if (finalStatus !== "granted" && finalStatus !== true) {
+    console.log("Notification permission not granted.");
+    return null;
+  }
 
   const projectId =
     Constants.expoConfig?.extra?.eas?.projectId ??
@@ -78,6 +79,46 @@ export async function sendPushNotificationToAll(title: string, body: string) {
       sound: "default",
       title,
       body,
+      data: {
+        screen: "home",
+      },
+    })) ?? [];
+
+  for (const message of messages) {
+    await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Accept-Encoding": "gzip, deflate",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(message),
+    });
+  }
+}
+export async function sendPushNotificationToHosts(
+  title: string,
+  body: string
+) {
+  const { data, error } = await supabase
+    .from("push_tokens")
+    .select("token")
+    .eq("is_host", true);
+
+  if (error) {
+    console.log("Error loading host push tokens:", error.message);
+    return;
+  }
+
+  const messages =
+    data?.map((item) => ({
+      to: item.token,
+      sound: "default",
+      title,
+      body,
+      data: {
+        screen: "host",
+      },
     })) ?? [];
 
   for (const message of messages) {
