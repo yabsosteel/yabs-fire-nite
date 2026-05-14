@@ -26,6 +26,8 @@ export default function HomeScreen() {
   const router = useRouter();
 
   const [event, setEvent] = useState<any>(null);
+  const [upcomingFires, setUpcomingFires] = useState<any[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState<any>(null);
   const [status, setStatus] = useState("Loading event...");
   const [message, setMessage] = useState("");
@@ -415,41 +417,50 @@ useEffect(() => {
   }
 
   async function loadEvent() {
-    setLoading(true);
-    const today = new Date().toISOString().split("T")[0];
-    const { data, error } = await supabase
-      .from("events")
-      .select(`
-        *,
-        rsvps (
-          id,
-          name,
-          first_name,
-          last_name,
-          response_status
-        )
-      `)
-      .eq("status", "published")
-      .is("deleted_at", null)
-      .gte("event_date", today)
-      .order("event_date", { ascending: true })
-      .order("event_time", { ascending: true })
-      .limit(1)
-      .maybeSingle();
+  setLoading(true);
 
-    if (error || !data) {
-      setEvent(null);
-      setStatus("No upcoming fire found");
-      setMessage("");
-      setLoading(false);
-      return;
-    }
+  const today = new Date().toISOString().split("T")[0];
 
-    setEvent(data);
-    setStatus(data.title || "Next Fire");
-    setMessage(data.message || "");
+  const { data, error } = await supabase
+    .from("events")
+    .select(`
+      *,
+      rsvps (
+        id,
+        name,
+        first_name,
+        last_name,
+        response_status
+      )
+    `)
+    .eq("status", "published")
+    .is("deleted_at", null)
+    .gte("event_date", today)
+    .order("event_date", { ascending: true })
+    .order("event_time", { ascending: true });
+
+  if (error || !data || data.length === 0) {
+    setUpcomingFires([]);
+    setEvent(null);
+    setStatus("No upcoming fire found");
+    setMessage("");
     setLoading(false);
+    return;
   }
+
+  setUpcomingFires(data);
+
+  let selectedFire =
+    data.find((fire: any) => fire.id === selectedEventId) || data[0];
+
+  setSelectedEventId(selectedFire.id);
+
+  setEvent(selectedFire);
+  setStatus(selectedFire.title || "Next Fire");
+  setMessage(selectedFire.message || "");
+
+  setLoading(false);
+}
 
   async function loadName() {
     const storedFirstName = await AsyncStorage.getItem("first_name");
@@ -661,7 +672,12 @@ async function sendChatMessage() {
 
     setApprovedGuests(data ?? []);
   }
-
+function selectUpcomingFire(fire: any) {
+  setSelectedEventId(fire.id);
+  setEvent(fire);
+  setStatus(fire.title || "Next Fire");
+  setMessage(fire.message || "");
+}
       return (
     <ScrollView contentContainerStyle={styles.screen}>
       <View style={styles.header}>
@@ -674,7 +690,30 @@ async function sendChatMessage() {
             : "No fire scheduled right now."}
         </Text>
       </View>
+{upcomingFires.length > 1 && (
+  <View style={styles.upcomingCard}>
+    <Text style={styles.sectionTitle}>Upcoming Fires</Text>
 
+    {upcomingFires.map((fire: any) => (
+      <Pressable
+        key={fire.id}
+        onPress={() => selectUpcomingFire(fire)}
+        style={[
+          styles.upcomingFireButton,
+          selectedEventId === fire.id && styles.selectedUpcomingFireButton,
+        ]}
+      >
+        <Text style={styles.upcomingFireTitle}>
+          {formatFireDateTime(fire.event_date, fire.event_time)}
+        </Text>
+
+        <Text style={styles.upcomingFireMessage}>
+          {fire.message || "No message added."}
+        </Text>
+      </Pressable>
+    ))}
+  </View>
+)}
       <Animated.View
   entering={FadeInUp.duration(500)}
   style={styles.heroCard}
@@ -1393,5 +1432,35 @@ chatHint: {
   color: "#9ca3af",
   fontSize: 12,
   marginBottom: 8,
+},
+upcomingCard: {
+  backgroundColor: "#18181b",
+  borderRadius: 18,
+  padding: 16,
+  borderWidth: 1,
+  borderColor: "#2f2f35",
+  marginBottom: 16,
+},
+upcomingFireButton: {
+  backgroundColor: "#232326",
+  borderRadius: 14,
+  padding: 14,
+  borderWidth: 1,
+  borderColor: "#2f2f35",
+  marginTop: 10,
+},
+selectedUpcomingFireButton: {
+  borderColor: "#f97316",
+  backgroundColor: "#2a1a10",
+},
+upcomingFireTitle: {
+  color: "#fff",
+  fontSize: 15,
+  fontWeight: "800",
+},
+upcomingFireMessage: {
+  color: "#b3b3ba",
+  marginTop: 5,
+  fontSize: 14,
 },
 });
