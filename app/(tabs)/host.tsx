@@ -180,20 +180,24 @@ export default function HostScreen() {
   async function loadPublishedFires() {
     const today = new Date().toISOString().split("T")[0];
 
-    const response = await supabase
-  .from("events")
-  .insert({
-    title: "Yabs Fire Nite",
-    event_date: newEventDate,
-    event_time: newEventTime,
-    message: newEventMessage,
-    status: "published",
-  })
-  .select()
-  .single();
-
-const data = response.data as any;
-const error = response.error;
+    const { data, error } = await supabase
+      .from("events")
+      .select(`
+        *,
+        rsvps (
+          id,
+          first_name,
+          last_name,
+          name,
+          response_status,
+          created_at
+        )
+      `)
+      .eq("status", "published")
+      .is("deleted_at", null)
+      .gte("event_date", today)
+      .order("event_date", { ascending: true })
+      .order("event_time", { ascending: true });
 
     if (error) {
       alert(error.message);
@@ -912,6 +916,10 @@ async function deleteGuest(guest: any) {
 
               <Text style={styles.fireMessage}>
                 {fire.message || "No message added."}
+              </Text>
+
+              <Text style={styles.fireMeta}>
+                Yes: {dedupePeople(fire.rsvps?.filter((r: any) => r.response_status === "going") || []).length} | Maybe: {dedupePeople(fire.rsvps?.filter((r: any) => r.response_status === "maybe") || []).length} | No: {dedupePeople(fire.rsvps?.filter((r: any) => r.response_status === "not_going") || []).length}
               </Text>
 
               <Pressable

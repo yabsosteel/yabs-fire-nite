@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as Notifications from "expo-notifications";
 import {
+  AppState,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,55 +12,51 @@ import {
   View,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
-import {
-  registerForPushNotificationsAsync,
-  sendFireChatNotification,
-} from "../../lib/notifications";
-import { sendPushNotificationToHosts } from "../../lib/notifications";
-import Animated, {
-  FadeInUp,
-  useSharedValue,
-  useAnimatedStyle,
-  withSpring,
-  withRepeat,
-  withTiming,
-} from "react-native-reanimated";
+import { registerForPushNotificationsAsync } from "../../lib/notifications";
+import Animated, { FadeInUp } from "react-native-reanimated";
 
 export default function HomeScreen() {
   const router = useRouter();
+  const eventIdRef = useRef<string | null>(null);
+
   const [event, setEvent] = useState<any>(null);
   const [upcomingFires, setUpcomingFires] = useState<any[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState<any>(null);
   const [status, setStatus] = useState("Loading event...");
   const [message, setMessage] = useState("");
-  const [chatMessages, setChatMessages] = useState<any[]>([]);
-  const [chatInput, setChatInput] = useState("");
-  const chatScrollRef = useRef<ScrollView>(null);
+
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [savedFirstName, setSavedFirstName] = useState<string | null>(null);
   const [savedLastName, setSavedLastName] = useState<string | null>(null);
+
   const [isApproved, setIsApproved] = useState(false);
   const [approvalChecked, setApprovalChecked] = useState(false);
+
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
   const [historyFilter, setHistoryFilter] = useState<
     "all" | "going" | "maybe" | "not_going"
   >("all");
+
   const [approvedGuests, setApprovedGuests] = useState<any[]>([]);
-  const [myRSVP, setMyRSVP] = useState<
-    "going" | "maybe" | "not_going" | null
-  >(null);
+  const [loading, setLoading] = useState(true);
+  const [hasUnreadChat, setHasUnreadChat] = useState(false);
+  const [latestChatCreatedAt, setLatestChatCreatedAt] = useState<string | null>(null);
+
   const isHost =
     savedFirstName?.toLowerCase() === "rian" &&
     savedLastName?.toLowerCase() === "yablun";
+
   const currentGoingList = dedupePeople(
     event?.rsvps?.filter((r: any) => r.response_status === "going") || []
   );
+
   const maybeList = dedupePeople(
     event?.rsvps?.filter((r: any) => r.response_status === "maybe") || []
   );
+
   const notGoingList = dedupePeople(
     event?.rsvps?.filter((r: any) => r.response_status === "not_going") || []
   );
@@ -95,62 +92,29 @@ export default function HomeScreen() {
       : visibleHistory.filter(
           (item: any) => item.response_status === historyFilter
         );
-const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     loadEvent();
     loadAnnouncement();
     loadName();
   }, []);
-  useEffect(() => {
-  if (!savedFirstName || !savedLastName) return;
 
-  setupNotifications();
-}, [savedFirstName, savedLastName]);
+  useEffect(() => {
+    if (!savedFirstName || !savedLastName) return;
+
+    setupNotifications();
+  }, [savedFirstName, savedLastName]);
 
   useEffect(() => {
     if (event?.id) {
       scheduleFireReminderIfNeeded(event);
     }
   }, [event?.id, event?.event_date, event?.event_time]);
-useEffect(() => {
-  if (event?.id) {
-    loadChatMessages();
-  }
-}, [event?.id]);
-useEffect(() => {
-  if (!event?.id) return;
 
-  const channel = supabase
-    .channel(`fire-chat-${event.id}`)
-    .on(
-      "postgres_changes",
-      {
-        event: "INSERT",
-        schema: "public",
-        table: "fire_chat",
-        filter: `event_id=eq.${event.id}`,
-      },
-      (payload) => {
-        const newMessage = payload.new;
+  useEffect(() => {
+    eventIdRef.current = event?.id ? String(event.id) : null;
+  }, [event?.id]);
 
-        setChatMessages((currentMessages: any[]) => {
-          const alreadyExists = currentMessages.some(
-            (message) => message.id === newMessage.id
-          );
-
-          if (alreadyExists) return currentMessages;
-
-          return [...currentMessages, newMessage];
-        });
-      }
-    )
-    .subscribe();
-
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}, [event?.id]);
   useEffect(() => {
     const channel = supabase
       .channel("realtime-home")
@@ -176,28 +140,62 @@ useEffect(() => {
           loadAnnouncement();
         }
       )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "fire_chat" },
+        (payload: any) => {
+          const changedEventId = payload?.new?.event_id
+            ? String(payload.new.event_id)
+            : null;
+          const activeEventId = eventIdRef.current;
+
+          if (activeEventId && changedEventId === activeEventId) {
+            loadUnreadChat(activeEventId);
+          }
+        }
+      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [event?.id]);
 
   useFocusEffect(
     useCallback(() => {
       loadEvent();
       loadAnnouncement();
 
+      if (event?.id) {
+        loadUnreadChat(event.id);
+      }
+
       if (isHost) {
         loadApprovedGuests();
       }
-    }, [isHost])
+    }, [isHost, event?.id, savedFirstName, savedLastName])
   );
 
   useEffect(() => {
-    const subscription = Notifications.addNotificationResponseReceivedListener(
+    const receivedSubscription = Notifications.addNotificationReceivedListener(
+      () => {
+        const activeEventId = eventIdRef.current;
+
+        if (activeEventId) {
+          loadUnreadChat(activeEventId);
+        }
+      }
+    );
+
+    const responseSubscription = Notifications.addNotificationResponseReceivedListener(
       (response) => {
         const data = response.notification.request.content.data;
+
+        const activeEventId = eventIdRef.current;
+
+        if (activeEventId) {
+          loadUnreadChat(activeEventId);
+        }
 
         if (data?.screen === "home") {
           router.push("/");
@@ -205,28 +203,94 @@ useEffect(() => {
       }
     );
 
-    return () => subscription.remove();
+    return () => {
+      receivedSubscription.remove();
+      responseSubscription.remove();
+    };
   }, [router]);
-
-  useEffect(() => {
-    if (event && savedFirstName && savedLastName) {
-      const mine = event.rsvps?.find(
-        (r: any) =>
-          r.first_name?.toLowerCase() === savedFirstName.toLowerCase() &&
-          r.last_name?.toLowerCase() === savedLastName.toLowerCase()
-      );
-
-      setMyRSVP(mine?.response_status || null);
-    } else {
-      setMyRSVP(null);
-    }
-  }, [event, savedFirstName, savedLastName]);
 
   useEffect(() => {
     if (isHost) {
       loadApprovedGuests();
     }
   }, [isHost]);
+
+  useEffect(() => {
+    if (!event?.id || !savedFirstName || !savedLastName) return;
+
+    loadUnreadChat(event.id);
+  }, [event?.id, savedFirstName, savedLastName]);
+
+  useEffect(() => {
+    if (!savedFirstName || !savedLastName) return;
+
+    const refreshUnread = () => {
+      const activeEventId = eventIdRef.current;
+
+      if (activeEventId) {
+        loadUnreadChat(activeEventId);
+      }
+    };
+
+    refreshUnread();
+
+    const interval = setInterval(refreshUnread, 3000);
+
+    const appStateSubscription = AppState.addEventListener(
+      "change",
+      (nextAppState) => {
+        if (nextAppState === "active") {
+          refreshUnread();
+        }
+      }
+    );
+
+    return () => {
+      clearInterval(interval);
+      appStateSubscription.remove();
+    };
+  }, [savedFirstName, savedLastName]);
+
+  function getChatSeenKey(fireEventId: string) {
+    const first = savedFirstName?.trim().toLowerCase() || "unknown";
+    const last = savedLastName?.trim().toLowerCase() || "unknown";
+
+    return `last_seen_chat_${fireEventId}_${first}_${last}`;
+  }
+
+  async function loadUnreadChat(fireEventId: string) {
+    if (!fireEventId || !savedFirstName || !savedLastName) return;
+
+    const { data, error } = await supabase
+      .from("fire_chat")
+      .select("created_at")
+      .eq("event_id", fireEventId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.log("Error loading unread chat status:", error.message);
+      return;
+    }
+
+    if (!data?.created_at) {
+      setLatestChatCreatedAt(null);
+      setHasUnreadChat(false);
+      return;
+    }
+
+    setLatestChatCreatedAt(data.created_at);
+
+    const lastSeen = await AsyncStorage.getItem(getChatSeenKey(fireEventId));
+
+    if (!lastSeen) {
+      setHasUnreadChat(true);
+      return;
+    }
+
+    setHasUnreadChat(new Date(data.created_at) > new Date(lastSeen));
+  }
 
   async function setupNotifications() {
     try {
@@ -415,50 +479,50 @@ useEffect(() => {
   }
 
   async function loadEvent() {
-  setLoading(true);
+    setLoading(true);
 
-  const today = new Date().toISOString().split("T")[0];
+    const today = new Date().toISOString().split("T")[0];
 
-  const { data, error } = await supabase
-    .from("events")
-    .select(`
-      *,
-      rsvps (
-        id,
-        name,
-        first_name,
-        last_name,
-        response_status
+    const { data, error } = await supabase
+      .from("events")
+      .select(
+        `
+        *,
+        rsvps (
+          id,
+          name,
+          first_name,
+          last_name,
+          response_status
+        )
+      `
       )
-    `)
-    .eq("status", "published")
-    .is("deleted_at", null)
-    .gte("event_date", today)
-    .order("event_date", { ascending: true })
-    .order("event_time", { ascending: true });
+      .eq("status", "published")
+      .is("deleted_at", null)
+      .gte("event_date", today)
+      .order("event_date", { ascending: true })
+      .order("event_time", { ascending: true });
 
-  if (error || !data || data.length === 0) {
-    setUpcomingFires([]);
-    setEvent(null);
-    setStatus("No upcoming fire found");
-    setMessage("");
+    if (error || !data || data.length === 0) {
+      setUpcomingFires([]);
+      setEvent(null);
+      setStatus("No upcoming fire found");
+      setMessage("");
+      setLoading(false);
+      return;
+    }
+
+    setUpcomingFires(data);
+
+    const selectedFire =
+      data.find((fire: any) => fire.id === selectedEventId) || data[0];
+
+    setSelectedEventId(selectedFire.id);
+    setEvent(selectedFire);
+    setStatus(selectedFire.title || "Next Fire");
+    setMessage(selectedFire.message || "");
     setLoading(false);
-    return;
   }
-
-  setUpcomingFires(data);
-
-  let selectedFire =
-    data.find((fire: any) => fire.id === selectedEventId) || data[0];
-
-  setSelectedEventId(selectedFire.id);
-
-  setEvent(selectedFire);
-  setStatus(selectedFire.title || "Next Fire");
-  setMessage(selectedFire.message || "");
-
-  setLoading(false);
-}
 
   async function loadName() {
     const storedFirstName = await AsyncStorage.getItem("first_name");
@@ -474,17 +538,17 @@ useEffect(() => {
   }
 
   async function checkApproval(first: string, last: string) {
-  const { data, error } = await supabase
-    .from("approved_users")
-    .select("*")
-    .eq("first_name", first)
-    .eq("last_name", last)
-    .eq("is_approved", true)
-    .maybeSingle();
+    const { data, error } = await supabase
+      .from("approved_users")
+      .select("*")
+      .eq("first_name", first)
+      .eq("last_name", last)
+      .eq("is_approved", true)
+      .maybeSingle();
 
-  setIsApproved(!error && !!data);
-  setApprovalChecked(true);
-}
+    setIsApproved(!error && !!data);
+    setApprovalChecked(true);
+  }
 
   async function saveName() {
     if (!firstName.trim() || !lastName.trim()) {
@@ -513,65 +577,6 @@ useEffect(() => {
     setApprovalChecked(true);
     setHistory([]);
     setShowHistory(false);
-    setMyRSVP(null);
-  }
-
-  async function handleRSVP(response_status: "going" | "maybe" | "not_going") {
-    if (!event || !savedFirstName || !savedLastName || !isApproved) return;
-
-    const { error } = await supabase.from("rsvps").upsert(
-      {
-        event_id: event.id,
-        name: `${savedFirstName} ${savedLastName}`,
-        first_name: savedFirstName,
-        last_name: savedLastName,
-        response_status,
-      },
-      { onConflict: "event_id,first_name,last_name" }
-    );
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-    
-const formattedDate = new Date(event.event_date).toLocaleDateString(
-  "en-US",
-  {
-    month: "2-digit",
-    day: "2-digit",
-    year: "numeric",
-  }
-);
-
-const responseText =
-  response_status === "going"
-    ? "is going to"
-    : response_status === "maybe"
-    ? "is maybe attending"
-    : "is not going to";
-
-await sendPushNotificationToHosts(
-  "Fire RSVP Update",
-  `${savedFirstName} ${savedLastName} ${responseText} ${
-    event.title || "the Fire"
-  } on ${formattedDate}.`
-);
-    setMyRSVP(response_status);
-
-    alert(
-      response_status === "going"
-        ? "You're in 🔥"
-        : response_status === "maybe"
-        ? "Got it — marked maybe"
-        : "Got it — marked not coming"
-    );
-
-    await loadEvent();
-
-    if (showHistory) {
-      await refreshHistory();
-    }
   }
 
   async function loadHistory() {
@@ -585,60 +590,14 @@ await sendPushNotificationToHosts(
     await refreshHistory();
     setShowHistory(true);
   }
-async function loadChatMessages() {
-  if (!event?.id) return;
 
-  const { data, error } = await supabase
-    .from("fire_chat")
-    .select("*")
-    .eq("event_id", event.id)
-    .order("created_at", { ascending: true });
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  setChatMessages(data ?? []);
-}
-
-async function sendChatMessage() {
-  if (!event?.id || !savedFirstName || !savedLastName || !chatInput.trim()) {
-    return;
-  }
-
-  const trimmedMessage = chatInput.trim();
-
-  const { error } = await supabase.from("fire_chat").insert({
-    event_id: event.id,
-    first_name: savedFirstName,
-    last_name: savedLastName,
-    message: trimmedMessage,
-  });
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  const fireDate = new Date(`${event.event_date}T00:00:00`).toLocaleDateString();
-
-await sendFireChatNotification(
-  event.id,
-  `${event.title || "Fire"} - ${fireDate}`,
-  savedFirstName,
-  savedFirstName,
-  savedLastName,
-  trimmedMessage
-);
-  setChatInput("");
-}
   async function refreshHistory() {
     if (!savedFirstName || !savedLastName) return;
 
     let query = supabase
       .from("rsvps")
-      .select(`
+      .select(
+        `
         *,
         events!inner (
           event_date,
@@ -647,7 +606,8 @@ await sendFireChatNotification(
           status,
           deleted_at
         )
-      `)
+      `
+      )
       .is("events.deleted_at", null)
       .neq("events.status", "deleted")
       .order("created_at", { ascending: false });
@@ -682,13 +642,33 @@ await sendFireChatNotification(
 
     setApprovedGuests(data ?? []);
   }
-function selectUpcomingFire(fire: any) {
-  setSelectedEventId(fire.id);
-  setEvent(fire);
-  setStatus(fire.title || "Next Fire");
-  setMessage(fire.message || "");
-}
-      return (
+
+  function selectUpcomingFire(fire: any) {
+    setSelectedEventId(fire.id);
+    setEvent(fire);
+    setStatus(fire.title || "Next Fire");
+    setMessage(fire.message || "");
+    loadUnreadChat(fire.id);
+  }
+
+  async function openFireDetails() {
+    if (!event?.id) return;
+
+    await AsyncStorage.setItem(
+      getChatSeenKey(event.id),
+      latestChatCreatedAt || new Date().toISOString()
+    );
+    setHasUnreadChat(false);
+
+    router.push({
+      pathname: "/fire-details",
+      params: {
+        eventId: event.id,
+      },
+    });
+  }
+
+  return (
     <ScrollView contentContainerStyle={styles.screen}>
       <View style={styles.header}>
         <Text style={styles.appTitle}>🔥 Yabs Fire Nite</Text>
@@ -700,224 +680,93 @@ function selectUpcomingFire(fire: any) {
             : "No fire scheduled right now."}
         </Text>
       </View>
-{upcomingFires.length > 1 && (
-  <View style={styles.upcomingCard}>
-    <Text style={styles.sectionTitle}>Upcoming Fires</Text>
 
-    {upcomingFires.map((fire: any) => (
-      <Pressable
-        key={fire.id}
-        onPress={() => selectUpcomingFire(fire)}
-        style={[
-          styles.upcomingFireButton,
-          selectedEventId === fire.id && styles.selectedUpcomingFireButton,
-        ]}
-      >
-        <Text style={styles.upcomingFireTitle}>
-          {formatFireDateTime(fire.event_date, fire.event_time)}
-        </Text>
+      {upcomingFires.length > 1 && (
+        <View style={styles.upcomingCard}>
+          <Text style={styles.sectionTitle}>Upcoming Fires</Text>
 
-        <Text style={styles.upcomingFireMessage}>
-          {fire.message || "No message added."}
-        </Text>
-      </Pressable>
-    ))}
-  </View>
-)}
-<Pressable
-  disabled={!event}
-  onPress={() => {
-    if (!event?.id) return;
-
-    router.push({
-      pathname: "/fire-details",
-      params: {
-        eventId: event.id,
-      },
-    });
-  }}
->
-  <Animated.View
-    entering={FadeInUp.duration(500)}
-    style={styles.heroCard}
-  >
-    <Text style={styles.heroLabel}>
-      {event ? "NEXT FIRE" : announcement ? "ANNOUNCEMENT" : "STATUS"}
-    </Text>
-
-    <Text style={styles.heroTitle}>
-      {event ? status : announcement ? "Fire Announcement" : status}
-    </Text>
-
-    {event && (
-      <Text style={styles.heroDate}>
-        {formatFireDateTime(event.event_date, event.event_time)}
-      </Text>
-    )}
-
-    <Text style={styles.heroMessage}>
-      {event
-        ? message || "No message for this fire."
-        : announcement
-        ? announcement.message
-        : "Check back soon."}
-    </Text>
-
-    {event && (
-      <View style={styles.statsRow}>
-        <View style={styles.statBox}>
-          <Text style={styles.statNumber}>{goingCount}</Text>
-          <Text style={styles.statLabel}>Coming</Text>
-        </View>
-
-        <View style={styles.statBox}>
-          <Text style={styles.statNumber}>{maybeCount}</Text>
-          <Text style={styles.statLabel}>Maybe</Text>
-        </View>
-
-        <View style={styles.statBox}>
-          <Text style={styles.statNumber}>{notGoingCount}</Text>
-          <Text style={styles.statLabel}>Not Coming</Text>
-        </View>
-
-        <View style={styles.statBox}>
-          <Text style={styles.statNumber}>{notRespondedList.length}</Text>
-          <Text style={styles.statLabel}>No Reply</Text>
-        </View>
-      </View>
-    )}
-
-    {event && isApproved && !isHost && (
-      <View style={styles.rsvpArea}>
-        <RSVPButton
-          label="Yes — I’m Coming"
-          activeLabel="You're In 🔥"
-          active={myRSVP === "going"}
-          color="#22c55e"
-          textColor="#07130b"
-          onPress={() => handleRSVP("going")}
-        />
-
-        <RSVPButton
-          label="Maybe"
-          activeLabel="Marked Maybe"
-          active={myRSVP === "maybe"}
-          color="#facc15"
-          textColor="#1c1600"
-          onPress={() => handleRSVP("maybe")}
-        />
-
-        <RSVPButton
-          label="No — I’m Not Coming"
-          activeLabel="Marked Not Coming"
-          active={myRSVP === "not_going"}
-          color="#ef4444"
-          textColor="#1a0505"
-          onPress={() => handleRSVP("not_going")}
-        />
-      </View>
-    )}
-  </Animated.View>
-</Pressable>
-
-      {event && (
-        <View style={styles.listCard}>
-          <Text style={styles.sectionTitle}>Guest List</Text>
-
-          <Text style={styles.listHeadingGreen}>Coming</Text>
-          {currentGoingList.length === 0 ? (
-            <Text style={styles.emptyText}>No yes responses yet.</Text>
-          ) : (
-            currentGoingList.map((r: any) => (
-              <Text key={r.id} style={styles.guestName}>
-                • {getDisplayName(r)}
+          {upcomingFires.map((fire: any) => (
+            <Pressable
+              key={fire.id}
+              onPress={() => selectUpcomingFire(fire)}
+              style={[
+                styles.upcomingFireButton,
+                selectedEventId === fire.id && styles.selectedUpcomingFireButton,
+              ]}
+            >
+              <Text style={styles.upcomingFireTitle}>
+                {formatFireDateTime(fire.event_date, fire.event_time)}
               </Text>
-            ))
-          )}
 
-          <Text style={styles.listHeadingYellow}>Maybe</Text>
-          {maybeList.length === 0 ? (
-            <Text style={styles.emptyText}>No maybe responses yet.</Text>
-          ) : (
-            maybeList.map((r: any) => (
-              <Text key={r.id} style={styles.guestName}>
-                • {getDisplayName(r)}
+              <Text style={styles.upcomingFireMessage}>
+                {fire.message || "No message added."}
               </Text>
-            ))
-          )}
-
-          <Text style={styles.listHeadingRed}>Not Coming</Text>
-          {notGoingList.length === 0 ? (
-            <Text style={styles.emptyText}>No no responses yet.</Text>
-          ) : (
-            notGoingList.map((r: any) => (
-              <Text key={r.id} style={styles.guestName}>
-                • {getDisplayName(r)}
-              </Text>
-            ))
-          )}
-
-          {isHost && (
-            <>
-              <Text style={styles.listHeadingYellow}>Hasn’t Responded</Text>
-              {notRespondedList.length === 0 ? (
-                <Text style={styles.emptyText}>Everyone has responded.</Text>
-              ) : (
-                notRespondedList.map((person: any) => (
-                  <Text key={person.id} style={styles.guestName}>
-                    • {getDisplayName(person)}
-                  </Text>
-                ))
-              )}
-            </>
-          )}
+            </Pressable>
+          ))}
         </View>
       )}
-{event && savedFirstName && savedLastName && isApproved && (
-  <View style={styles.chatCard}>
-  
-<Text style={styles.chatHint}>Scroll inside chat to view older messages</Text>
-<ScrollView
-  ref={chatScrollRef}
-  style={{ maxHeight: 300 }}
-  nestedScrollEnabled={true}
-  keyboardShouldPersistTaps="handled"
-  onContentSizeChange={() => {
-  if (chatMessages.length > 0) {
-    setTimeout(() => {
-      chatScrollRef.current?.scrollToEnd({ animated: true });
-    }, 100);
-  }
-}}
->
-  {chatMessages.length === 0 ? (
-    <Text style={styles.emptyText}>No messages yet. Start the chat.</Text>
-  ) : (
-    chatMessages.map((chat: any) => (
-      <View key={chat.id} style={styles.chatMessage}>
-        <Text style={styles.chatName}>
-          {chat.first_name} {chat.last_name}
-        </Text>
-        <Text style={styles.chatText}>{chat.message}</Text>
-      </View>
-    ))
-  )}
-</ScrollView>
 
-    <TextInput
-      placeholder="Send a message..."
-      placeholderTextColor="#888"
-      value={chatInput}
-      onChangeText={setChatInput}
-      style={styles.chatInput}
-      maxLength={200}
-    />
+      <Pressable disabled={!event} onPress={openFireDetails}>
+        <Animated.View entering={FadeInUp.duration(500)} style={styles.heroCard}>
+          <Text style={styles.heroLabel}>
+            {event ? "NEXT FIRE" : announcement ? "ANNOUNCEMENT" : "STATUS"}
+          </Text>
 
-    <Pressable onPress={sendChatMessage} style={styles.primaryButton}>
-      <Text style={styles.primaryButtonText}>Send Message</Text>
-    </Pressable>
-  </View>
-)}
+          <Text style={styles.heroTitle}>
+            {event ? status : announcement ? "Fire Announcement" : status}
+          </Text>
+
+          {event && (
+            <Text style={styles.heroDate}>
+              {formatFireDateTime(event.event_date, event.event_time)}
+            </Text>
+          )}
+
+          <Text style={styles.heroMessage}>
+            {event
+              ? message || "No message for this fire."
+              : announcement
+              ? announcement.message
+              : loading
+              ? "Loading..."
+              : "Check back soon."}
+          </Text>
+
+          {event && (
+            <>
+              <View style={styles.statsRow}>
+                <View style={styles.statBox}>
+                  <Text style={styles.statNumber}>{goingCount}</Text>
+                  <Text style={styles.statLabel}>Coming</Text>
+                </View>
+
+                <View style={styles.statBox}>
+                  <Text style={styles.statNumber}>{maybeCount}</Text>
+                  <Text style={styles.statLabel}>Maybe</Text>
+                </View>
+
+                <View style={styles.statBox}>
+                  <Text style={styles.statNumber}>{notGoingCount}</Text>
+                  <Text style={styles.statLabel}>Not Coming</Text>
+                </View>
+
+                <View style={styles.statBox}>
+                  <Text style={styles.statNumber}>{notRespondedList.length}</Text>
+                  <Text style={styles.statLabel}>No Reply</Text>
+                </View>
+              </View>
+
+              {hasUnreadChat && (
+                <View style={styles.unreadChatPill}>
+                  <Text style={styles.unreadChatPillText}>New chat messages</Text>
+                </View>
+              )}
+
+              <Text style={styles.tapHint}>Tap to RSVP, view guests, and chat</Text>
+            </>
+          )}
+        </Animated.View>
+      </Pressable>
 
       {!savedFirstName || !savedLastName ? (
         <View style={styles.mainCard}>
@@ -1054,117 +903,30 @@ function selectUpcomingFire(fire: any) {
   );
 }
 
-function RSVPButton({
+function FilterButton({
   label,
-  activeLabel,
   active,
-  color,
-  textColor,
   onPress,
 }: {
   label: string;
-  activeLabel: string;
   active: boolean;
-  color: string;
-  textColor: string;
   onPress: () => void;
 }) {
-  const scale = useSharedValue(1);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-
   return (
-    <Animated.View style={animatedStyle}>
-      <Pressable
-        onPressIn={() => {
-          scale.value = withSpring(0.96);
-        }}
-        onPressOut={() => {
-          scale.value = withSpring(1);
-        }}
-        onPress={onPress}
-        style={[
-          styles.rsvpButton,
-          {
-            backgroundColor: active ? color : "#232326",
-            borderColor: active ? color : "#2f2f35",
-          },
-        ]}
-      >
-        <Text
-          style={[
-            styles.rsvpButtonText,
-            {
-              color: active ? textColor : "#fff",
-            },
-          ]}
-        >
-          {active ? activeLabel : label}
-        </Text>
-      </Pressable>
-    </Animated.View>
-  );
-}
-function FilterButton({
-    label,
-    active,
-    onPress,
-  }: {
-    label: string;
-    active: boolean;
-    onPress: () => void;
-  }) {
-    return (
-      <Pressable
-        onPress={onPress}
-        style={[
-          styles.filterButton,
-          {
-            backgroundColor: active ? "#f97316" : "#232326",
-            borderColor: active ? "#f97316" : "#2f2f35",
-          },
-        ]}
-      >
-        <Text style={{ color: active ? "#111" : "#fff", fontWeight: "700" }}>
-          {label}
-        </Text>
-      </Pressable>
-    );
-  }
-function SkeletonCard() {
-  const opacity = useSharedValue(0.4);
-
-  useEffect(() => {
-    opacity.value = withRepeat(
-      withTiming(0.8, { duration: 900 }),
-      -1,
-      true
-    );
-  }, []);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value,
-  }));
-
-  return (
-    <Animated.View
+    <Pressable
+      onPress={onPress}
       style={[
+        styles.filterButton,
         {
-          width: "100%",
-          backgroundColor: "#18181b",
-          borderRadius: 22,
-          padding: 20,
-          borderWidth: 1,
-          borderColor: "#2f2f35",
-          marginTop: 8,
-          height: 280,
+          backgroundColor: active ? "#f97316" : "#232326",
+          borderColor: active ? "#f97316" : "#2f2f35",
         },
-        animatedStyle,
       ]}
-    />
+    >
+      <Text style={{ color: active ? "#111" : "#fff", fontWeight: "700" }}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -1229,6 +991,26 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
   },
+  tapHint: {
+    color: "#f97316",
+    fontSize: 13,
+    fontWeight: "800",
+    textAlign: "center",
+    marginTop: 16,
+  },
+  unreadChatPill: {
+    alignSelf: "center",
+    marginTop: 14,
+    backgroundColor: "#ef4444",
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+  },
+  unreadChatPillText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "900",
+  },
   mainCard: {
     width: "100%",
     backgroundColor: "#18181b",
@@ -1271,57 +1053,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
-  rsvpArea: {
-    marginTop: 18,
-  },
-  rsvpButton: {
-    paddingVertical: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 10,
-  },
-  rsvpButtonText: {
-    fontWeight: "900",
-    textAlign: "center",
-    fontSize: 15,
-  },
-  listCard: {
-    width: "100%",
-    marginTop: 14,
-    backgroundColor: "#18181b",
-    borderRadius: 18,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: "#2f2f35",
-  },
   sectionTitle: {
     color: "#fff",
     fontSize: 18,
     fontWeight: "900",
     marginBottom: 12,
-  },
-  listHeadingGreen: {
-    color: "#22c55e",
-    fontWeight: "900",
-    marginTop: 6,
-    marginBottom: 4,
-  },
-  listHeadingRed: {
-    color: "#ef4444",
-    fontWeight: "900",
-    marginTop: 14,
-    marginBottom: 4,
-  },
-  listHeadingYellow: {
-    color: "#facc15",
-    fontWeight: "900",
-    marginTop: 14,
-    marginBottom: 4,
-  },
-  guestName: {
-    color: "#d4d4d8",
-    marginTop: 4,
-    fontSize: 15,
   },
   emptyText: {
     color: "#8e8e95",
@@ -1418,73 +1154,35 @@ const styles = StyleSheet.create({
     marginTop: 20,
     textAlign: "center",
   },
-  chatCard: {
-  width: "100%",
-  marginTop: 14,
-  backgroundColor: "#18181b",
-  borderRadius: 18,
-  padding: 18,
-  borderWidth: 1,
-  borderColor: "#2f2f35",
-},
-chatMessage: {
-  backgroundColor: "#232326",
-  borderRadius: 12,
-  padding: 10,
-  marginTop: 8,
-  borderWidth: 1,
-  borderColor: "#2f2f35",
-},
-chatName: {
-  color: "#f97316",
-  fontWeight: "800",
-  marginBottom: 4,
-},
-chatText: {
-  color: "#fff",
-  fontSize: 15,
-  lineHeight: 21,
-},
-chatInput: {
-  marginTop: 12,
-  backgroundColor: "#232326",
-  color: "#fff",
-  padding: 12,
-  borderRadius: 10,
-},
-chatHint: {
-  color: "#9ca3af",
-  fontSize: 12,
-  marginBottom: 8,
-},
-upcomingCard: {
-  backgroundColor: "#18181b",
-  borderRadius: 18,
-  padding: 16,
-  borderWidth: 1,
-  borderColor: "#2f2f35",
-  marginBottom: 16,
-},
-upcomingFireButton: {
-  backgroundColor: "#232326",
-  borderRadius: 14,
-  padding: 14,
-  borderWidth: 1,
-  borderColor: "#2f2f35",
-  marginTop: 10,
-},
-selectedUpcomingFireButton: {
-  borderColor: "#f97316",
-  backgroundColor: "#2a1a10",
-},
-upcomingFireTitle: {
-  color: "#fff",
-  fontSize: 15,
-  fontWeight: "800",
-},
-upcomingFireMessage: {
-  color: "#b3b3ba",
-  marginTop: 5,
-  fontSize: 14,
-},
+  upcomingCard: {
+    width: "100%",
+    backgroundColor: "#18181b",
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#2f2f35",
+    marginBottom: 16,
+  },
+  upcomingFireButton: {
+    backgroundColor: "#232326",
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#2f2f35",
+    marginTop: 10,
+  },
+  selectedUpcomingFireButton: {
+    borderColor: "#f97316",
+    backgroundColor: "#2a1a10",
+  },
+  upcomingFireTitle: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  upcomingFireMessage: {
+    color: "#b3b3ba",
+    marginTop: 5,
+    fontSize: 14,
+  },
 });
