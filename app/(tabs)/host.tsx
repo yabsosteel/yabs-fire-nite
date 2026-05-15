@@ -180,24 +180,20 @@ export default function HostScreen() {
   async function loadPublishedFires() {
     const today = new Date().toISOString().split("T")[0];
 
-    const { data, error } = await supabase
-      .from("events")
-      .select(`
-        *,
-        rsvps (
-          id,
-          first_name,
-          last_name,
-          name,
-          response_status,
-          created_at
-        )
-      `)
-      .eq("status", "published")
-      .is("deleted_at", null)
-      .gte("event_date", today)
-      .order("event_date", { ascending: true })
-      .order("event_time", { ascending: true });
+    const response = await supabase
+  .from("events")
+  .insert({
+    title: "Yabs Fire Nite",
+    event_date: newEventDate,
+    event_time: newEventTime,
+    message: newEventMessage,
+    status: "published",
+  })
+  .select()
+  .single();
+
+const data = response.data as any;
+const error = response.error;
 
     if (error) {
       alert(error.message);
@@ -314,19 +310,30 @@ export default function HostScreen() {
         return;
       }
 
-      const { error } = await supabase.from("events").insert({
-        title: "Yabs Fire Nite",
-        event_date: newEventDate,
-        event_time: newEventTime,
-        message: newEventMessage,
-        status: "published",
-      });
+      const { data, error } = await supabase
+  .from("events")
+  .insert({
+    title: "Yabs Fire Nite",
+    event_date: newEventDate,
+    event_time: newEventTime,
+    message: newEventMessage,
+    status: "published",
+  })
+  .select()
+  .single();
 
-      if (error) {
-        alert(error.message);
-        return;
-      }
+if (error) {
+  alert(error.message);
+  return;
+}
 
+await supabase.from("rsvps").insert({
+  event_id: data.id,
+  first_name: "Rian",
+  last_name: "Yablun",
+  name: "Rian Yablun",
+  response_status: "going",
+});
       await sendPushNotificationToAll(
         "🔥 New Fire",
         `${formatFireDateTime(newEventDate, newEventTime)} — Tap to RSVP`

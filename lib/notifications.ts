@@ -13,7 +13,10 @@ Notifications.setNotificationHandler({
   }),
 });
 
-export async function registerForPushNotificationsAsync() {
+export async function registerForPushNotificationsAsync(
+  savedFirstName?: string | null,
+  savedLastName?: string | null
+) {
   if (!Device.isDevice) {
     console.log("Push notifications only work on a physical device.");
     return null;
@@ -51,12 +54,14 @@ export async function registerForPushNotificationsAsync() {
   ).data;
 
   const { error } = await supabase.from("push_tokens").upsert(
-    {
-      token,
-      device_name: Device.deviceName ?? "Unknown device",
-    },
-    { onConflict: "token" }
-  );
+  {
+    token,
+    device_name: Device.deviceName ?? "Unknown device",
+    first_name: savedFirstName,
+    last_name: savedLastName,
+  },
+  { onConflict: "token" }
+);
 
   if (error) {
     console.log("Error saving push token:", error.message);
@@ -162,4 +167,73 @@ export function formatFireTime(timeString: string) {
 
 export function formatFireDateTime(dateString: string, timeString: string) {
   return `${formatFireDate(dateString)} at ${formatFireTime(timeString)}`;
+}
+export async function sendFireChatNotification(
+  eventId: string,
+  eventTitle: string,
+  senderName: string,
+  senderFirstName: string,
+  senderLastName: string,
+  message: string
+) {
+  const { data: attendees, error: attendeeError } = await supabase
+  .from("rsvps")
+  .select("first_name,last_name")
+  .eq("event_id", eventId)
+  .in("response_status", ["going", "maybe"]);
+
+if (attendeeError) {
+  console.log("Error loading attendees:", attendeeError.message);
+  return;
+}
+
+const attendeeNames =
+  attendees?.map(
+    (person) => `${person.first_name} ${person.last_name}`
+  ) ?? [];
+
+const { data, error } = await supabase
+  .from("push_tokens")
+  .select("token,first_name,last_name");
+
+if (error) {
+  console.log("Error loading push tokens:", error.message);
+  return;
+}
+
+const filteredTokens =
+  data?.filter((item) => {
+    const fullName = `${item.first_name} ${item.last_name}`;
+
+    const isAttending = attendeeNames.includes(fullName);
+
+    const isSender =
+      item.first_name === senderFirstName &&
+      item.last_name === senderLastName;
+
+    return isAttending && !isSender;
+  }) ?? [];
+
+const messages = filteredTokens.map((item) => ({
+  to: item.token,
+  sound: "default",
+  title: `${senderName} posted in ${eventTitle}`,
+  body: message,
+  data: {
+    screen: "home",
+    eventId,
+  },
+}));
+
+for (const notification of messages) {
+  await fetch("https://exp.host/--/api/v2/push/send", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Accept-Encoding": "gzip, deflate",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(notification),
+  });
+}
 }

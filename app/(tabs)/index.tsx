@@ -11,7 +11,10 @@ import {
   View,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
-import { registerForPushNotificationsAsync } from "../../lib/notifications";
+import {
+  registerForPushNotificationsAsync,
+  sendFireChatNotification,
+} from "../../lib/notifications";
 import { sendPushNotificationToHosts } from "../../lib/notifications";
 import Animated, {
   FadeInUp,
@@ -24,7 +27,6 @@ import Animated, {
 
 export default function HomeScreen() {
   const router = useRouter();
-
   const [event, setEvent] = useState<any>(null);
   const [upcomingFires, setUpcomingFires] = useState<any[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
@@ -34,38 +36,30 @@ export default function HomeScreen() {
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [chatInput, setChatInput] = useState("");
   const chatScrollRef = useRef<ScrollView>(null);
-
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [savedFirstName, setSavedFirstName] = useState<string | null>(null);
   const [savedLastName, setSavedLastName] = useState<string | null>(null);
-
   const [isApproved, setIsApproved] = useState(false);
   const [approvalChecked, setApprovalChecked] = useState(false);
-
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
   const [historyFilter, setHistoryFilter] = useState<
     "all" | "going" | "maybe" | "not_going"
   >("all");
-
   const [approvedGuests, setApprovedGuests] = useState<any[]>([]);
   const [myRSVP, setMyRSVP] = useState<
     "going" | "maybe" | "not_going" | null
   >(null);
-
   const isHost =
     savedFirstName?.toLowerCase() === "rian" &&
     savedLastName?.toLowerCase() === "yablun";
-
   const currentGoingList = dedupePeople(
     event?.rsvps?.filter((r: any) => r.response_status === "going") || []
   );
-
   const maybeList = dedupePeople(
     event?.rsvps?.filter((r: any) => r.response_status === "maybe") || []
   );
-
   const notGoingList = dedupePeople(
     event?.rsvps?.filter((r: any) => r.response_status === "not_going") || []
   );
@@ -104,11 +98,15 @@ export default function HomeScreen() {
 const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setupNotifications();
     loadEvent();
     loadAnnouncement();
     loadName();
   }, []);
+  useEffect(() => {
+  if (!savedFirstName || !savedLastName) return;
+
+  setupNotifications();
+}, [savedFirstName, savedLastName]);
 
   useEffect(() => {
     if (event?.id) {
@@ -232,7 +230,7 @@ useEffect(() => {
 
   async function setupNotifications() {
     try {
-      await registerForPushNotificationsAsync();
+      await registerForPushNotificationsAsync(savedFirstName, savedLastName);
     } catch (error) {
       console.log("Push registration failed:", error);
     }
@@ -609,11 +607,13 @@ async function sendChatMessage() {
     return;
   }
 
+  const trimmedMessage = chatInput.trim();
+
   const { error } = await supabase.from("fire_chat").insert({
     event_id: event.id,
     first_name: savedFirstName,
     last_name: savedLastName,
-    message: chatInput.trim(),
+    message: trimmedMessage,
   });
 
   if (error) {
@@ -621,6 +621,16 @@ async function sendChatMessage() {
     return;
   }
 
+  const fireDate = new Date(`${event.event_date}T00:00:00`).toLocaleDateString();
+
+await sendFireChatNotification(
+  event.id,
+  `${event.title || "Fire"} - ${fireDate}`,
+  savedFirstName,
+  savedFirstName,
+  savedLastName,
+  trimmedMessage
+);
   setChatInput("");
 }
   async function refreshHistory() {
@@ -714,87 +724,101 @@ function selectUpcomingFire(fire: any) {
     ))}
   </View>
 )}
-      <Animated.View
-  entering={FadeInUp.duration(500)}
-  style={styles.heroCard}
+<Pressable
+  disabled={!event}
+  onPress={() => {
+    if (!event?.id) return;
+
+    router.push({
+      pathname: "/fire-details",
+      params: {
+        eventId: event.id,
+      },
+    });
+  }}
 >
-        <Text style={styles.heroLabel}>
-          {event ? "NEXT FIRE" : announcement ? "ANNOUNCEMENT" : "STATUS"}
-        </Text>
+  <Animated.View
+    entering={FadeInUp.duration(500)}
+    style={styles.heroCard}
+  >
+    <Text style={styles.heroLabel}>
+      {event ? "NEXT FIRE" : announcement ? "ANNOUNCEMENT" : "STATUS"}
+    </Text>
 
-        <Text style={styles.heroTitle}>
-          {event ? status : announcement ? "Fire Announcement" : status}
-        </Text>
+    <Text style={styles.heroTitle}>
+      {event ? status : announcement ? "Fire Announcement" : status}
+    </Text>
 
-        {event && (
-          <Text style={styles.heroDate}>
-            {formatFireDateTime(event.event_date, event.event_time)}
-          </Text>
-        )}
+    {event && (
+      <Text style={styles.heroDate}>
+        {formatFireDateTime(event.event_date, event.event_time)}
+      </Text>
+    )}
 
-        <Text style={styles.heroMessage}>
-          {event
-            ? message || "No message for this fire."
-            : announcement
-            ? announcement.message
-            : "Check back soon."}
-        </Text>
+    <Text style={styles.heroMessage}>
+      {event
+        ? message || "No message for this fire."
+        : announcement
+        ? announcement.message
+        : "Check back soon."}
+    </Text>
 
-        {event && (
-          <View style={styles.statsRow}>
-            <View style={styles.statBox}>
-              <Text style={styles.statNumber}>{goingCount}</Text>
-              <Text style={styles.statLabel}>Coming</Text>
-            </View>
-
-            <View style={styles.statBox}>
-              <Text style={styles.statNumber}>{maybeCount}</Text>
-              <Text style={styles.statLabel}>Maybe</Text>
-            </View>
-
-            <View style={styles.statBox}>
-              <Text style={styles.statNumber}>{notGoingCount}</Text>
-              <Text style={styles.statLabel}>Not Coming</Text>
-            </View>
-
-            <View style={styles.statBox}>
-              <Text style={styles.statNumber}>{notRespondedList.length}</Text>
-              <Text style={styles.statLabel}>No Reply</Text>
-            </View>
+    {event && (
+      <View style={styles.statsRow}>
+        <View style={styles.statBox}>
+          <Text style={styles.statNumber}>{goingCount}</Text>
+          <Text style={styles.statLabel}>Coming</Text>
         </View>
-        )}
 
-        {event && isApproved && !isHost && (
-          <View style={styles.rsvpArea}>
-            <RSVPButton
-              label="Yes — I’m Coming"
-              activeLabel="You're In 🔥"
-              active={myRSVP === "going"}
-              color="#22c55e"
-              textColor="#07130b"
-              onPress={() => handleRSVP("going")}
-            />
+        <View style={styles.statBox}>
+          <Text style={styles.statNumber}>{maybeCount}</Text>
+          <Text style={styles.statLabel}>Maybe</Text>
+        </View>
 
-            <RSVPButton
-              label="Maybe"
-              activeLabel="Marked Maybe"
-              active={myRSVP === "maybe"}
-              color="#facc15"
-              textColor="#1c1600"
-              onPress={() => handleRSVP("maybe")}
-            />
+        <View style={styles.statBox}>
+          <Text style={styles.statNumber}>{notGoingCount}</Text>
+          <Text style={styles.statLabel}>Not Coming</Text>
+        </View>
 
-            <RSVPButton
-              label="No — I’m Not Coming"
-              activeLabel="Marked Not Coming"
-              active={myRSVP === "not_going"}
-              color="#ef4444"
-              textColor="#1a0505"
-              onPress={() => handleRSVP("not_going")}
-            />
-          </View>
-        )}
-      </Animated.View>
+        <View style={styles.statBox}>
+          <Text style={styles.statNumber}>{notRespondedList.length}</Text>
+          <Text style={styles.statLabel}>No Reply</Text>
+        </View>
+      </View>
+    )}
+
+    {event && isApproved && !isHost && (
+      <View style={styles.rsvpArea}>
+        <RSVPButton
+          label="Yes — I’m Coming"
+          activeLabel="You're In 🔥"
+          active={myRSVP === "going"}
+          color="#22c55e"
+          textColor="#07130b"
+          onPress={() => handleRSVP("going")}
+        />
+
+        <RSVPButton
+          label="Maybe"
+          activeLabel="Marked Maybe"
+          active={myRSVP === "maybe"}
+          color="#facc15"
+          textColor="#1c1600"
+          onPress={() => handleRSVP("maybe")}
+        />
+
+        <RSVPButton
+          label="No — I’m Not Coming"
+          activeLabel="Marked Not Coming"
+          active={myRSVP === "not_going"}
+          color="#ef4444"
+          textColor="#1a0505"
+          onPress={() => handleRSVP("not_going")}
+        />
+      </View>
+    )}
+  </Animated.View>
+</Pressable>
 
       {event && (
         <View style={styles.listCard}>
