@@ -5,6 +5,7 @@ import * as Notifications from "expo-notifications";
 import {
   AppState,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -37,6 +38,7 @@ export default function HomeScreen() {
 
   const [approvedGuests, setApprovedGuests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [hasUnreadChat, setHasUnreadChat] = useState(false);
   const [latestChatCreatedAt, setLatestChatCreatedAt] = useState<string | null>(
     null,
@@ -47,6 +49,7 @@ export default function HomeScreen() {
     savedLastName?.toLowerCase() === "yablun";
 
   const latestAnnouncement = announcements[0] || null;
+  const showHomeLoadingCard = loading && !event && !latestAnnouncement;
 
   const currentGoingList = dedupePeople(
     event?.rsvps?.filter((r: any) => r.response_status === "going") || [],
@@ -422,6 +425,25 @@ export default function HomeScreen() {
     await AsyncStorage.setItem(reminderKey, "true");
   }
 
+  async function onRefresh() {
+    setRefreshing(true);
+
+    try {
+      await loadEvent();
+      await loadAnnouncements();
+      await loadName();
+      await loadApprovedGuests();
+
+      const activeEventId = eventIdRef.current;
+
+      if (activeEventId) {
+        await loadUnreadChat(activeEventId);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   function getDisplayName(person: any) {
     if (person?.first_name && person?.last_name) {
       return `${person.first_name} ${person.last_name}`;
@@ -663,7 +685,18 @@ export default function HomeScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.screen}>
+    <ScrollView
+      contentContainerStyle={styles.screen}
+      refreshControl={
+        <RefreshControl
+  refreshing={refreshing}
+  onRefresh={onRefresh}
+  tintColor="#f97316"
+  colors={["#f97316"]}
+  progressBackgroundColor="#121212"
+/>
+      }
+    >
       <View style={styles.header}>
         <Text style={styles.appTitle}>🔥 Yabs Fire Nite</Text>
         <Text style={styles.subtitle}>
@@ -675,72 +708,90 @@ export default function HomeScreen() {
         </Text>
       </View>
 
-      <Pressable disabled={!event} onPress={openFireDetails}>
+      <Pressable disabled={!event || showHomeLoadingCard} onPress={openFireDetails}>
         <Animated.View
           entering={FadeInUp.duration(500)}
           style={styles.heroCard}
         >
-          <Text style={styles.heroLabel}>
-            {event ? "NEXT FIRE" : latestAnnouncement ? "ANNOUNCEMENT" : "STATUS"}
-          </Text>
-
-          <Text style={styles.heroTitle}>
-            {event ? status : latestAnnouncement ? "Fire Announcement" : status}
-          </Text>
-
-          {event && (
-            <Text style={styles.heroDate}>
-              {formatFireDateTime(event.event_date, event.event_time)}
-            </Text>
-          )}
-
-          <Text style={styles.heroMessage}>
-            {event
-              ? message || "No message for this fire."
-              : latestAnnouncement
-                ? latestAnnouncement.message
-                : loading
-                  ? "Loading..."
-                  : "Check back soon."}
-          </Text>
-
-          {event && (
+          {showHomeLoadingCard ? (
             <>
+              <Text style={styles.heroLabel}>LOADING FIRE</Text>
+
+              <View style={styles.skeletonTitle} />
+              <View style={styles.skeletonDate} />
+              <View style={styles.skeletonMessageLong} />
+              <View style={styles.skeletonMessageShort} />
+
               <View style={styles.statsRow}>
-                <View style={styles.statBox}>
-                  <Text style={styles.statNumber}>{goingCount}</Text>
-                  <Text style={styles.statLabel}>Coming</Text>
-                </View>
-
-                <View style={styles.statBox}>
-                  <Text style={styles.statNumber}>{maybeCount}</Text>
-                  <Text style={styles.statLabel}>Maybe</Text>
-                </View>
-
-                <View style={styles.statBox}>
-                  <Text style={styles.statNumber}>{notGoingCount}</Text>
-                  <Text style={styles.statLabel}>Not Coming</Text>
-                </View>
-
-                <View style={styles.statBox}>
-                  <Text style={styles.statNumber}>
-                    {notRespondedList.length}
-                  </Text>
-                  <Text style={styles.statLabel}>No Reply</Text>
-                </View>
+                <View style={styles.skeletonStatBox} />
+                <View style={styles.skeletonStatBox} />
+                <View style={styles.skeletonStatBox} />
+                <View style={styles.skeletonStatBox} />
               </View>
+            </>
+          ) : (
+            <>
+              <Text style={styles.heroLabel}>
+                {event ? "NEXT FIRE" : latestAnnouncement ? "ANNOUNCEMENT" : "STATUS"}
+              </Text>
 
-              {hasUnreadChat && (
-                <View style={styles.unreadChatPill}>
-                  <Text style={styles.unreadChatPillText}>
-                    New chat messages
-                  </Text>
-                </View>
+              <Text style={styles.heroTitle}>
+                {event ? status : latestAnnouncement ? "Fire Announcement" : status}
+              </Text>
+
+              {event && (
+                <Text style={styles.heroDate}>
+                  {formatFireDateTime(event.event_date, event.event_time)}
+                </Text>
               )}
 
-              <Text style={styles.tapHint}>
-                Tap to RSVP, view guests, and chat
+              <Text style={styles.heroMessage}>
+                {event
+                  ? message || "No message for this fire."
+                  : latestAnnouncement
+                    ? latestAnnouncement.message
+                    : "Check back soon."}
               </Text>
+
+              {event && (
+                <>
+                  <View style={styles.statsRow}>
+                    <View style={styles.statBox}>
+                      <Text style={styles.statNumber}>{goingCount}</Text>
+                      <Text style={styles.statLabel}>Coming</Text>
+                    </View>
+
+                    <View style={styles.statBox}>
+                      <Text style={styles.statNumber}>{maybeCount}</Text>
+                      <Text style={styles.statLabel}>Maybe</Text>
+                    </View>
+
+                    <View style={styles.statBox}>
+                      <Text style={styles.statNumber}>{notGoingCount}</Text>
+                      <Text style={styles.statLabel}>Not Coming</Text>
+                    </View>
+
+                    <View style={styles.statBox}>
+                      <Text style={styles.statNumber}>
+                        {notRespondedList.length}
+                      </Text>
+                      <Text style={styles.statLabel}>No Reply</Text>
+                    </View>
+                  </View>
+
+                  {hasUnreadChat && (
+                    <View style={styles.unreadChatPill}>
+                      <Text style={styles.unreadChatPillText}>
+                        New chat messages
+                      </Text>
+                    </View>
+                  )}
+
+                  <Text style={styles.tapHint}>
+                    Tap to RSVP, view guests, and chat
+                  </Text>
+                </>
+              )}
             </>
           )}
         </Animated.View>
@@ -936,6 +987,41 @@ const styles = StyleSheet.create({
       height: 6,
     },
     elevation: 6,
+  },
+  skeletonTitle: {
+    width: "78%",
+    height: 30,
+    backgroundColor: "#2b2b2b",
+    borderRadius: 10,
+    marginTop: 4,
+    marginBottom: 14,
+  },
+  skeletonDate: {
+    width: "58%",
+    height: 24,
+    backgroundColor: "#2b2b2b",
+    borderRadius: 10,
+    marginBottom: 18,
+  },
+  skeletonMessageLong: {
+    width: "100%",
+    height: 16,
+    backgroundColor: "#2b2b2b",
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  skeletonMessageShort: {
+    width: "72%",
+    height: 16,
+    backgroundColor: "#2b2b2b",
+    borderRadius: 10,
+    marginBottom: 20,
+  },
+  skeletonStatBox: {
+    flex: 1,
+    height: 70,
+    backgroundColor: "#2b2b2b",
+    borderRadius: 16,
   },
   heroLabel: {
     color: "#f97316",

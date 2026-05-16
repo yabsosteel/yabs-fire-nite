@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { useFocusEffect } from "expo-router";
 import {
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -26,6 +27,7 @@ export default function HistoryScreen() {
   const [savedLastName, setSavedLastName] = useState<string | null>(null);
   const [isHost, setIsHost] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>("all");
   const [hostSearch, setHostSearch] = useState("");
   const [hostStatusFilter, setHostStatusFilter] = useState<HostStatusFilter>("all");
@@ -586,9 +588,30 @@ export default function HistoryScreen() {
       </>
     );
   }
+  async function onRefresh() {
+    setRefreshing(true);
+
+    try {
+      await loadHistoryScreen();
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
 
   return (
-    <ScrollView contentContainerStyle={styles.screen}>
+    <ScrollView
+      contentContainerStyle={styles.screen}
+      refreshControl={
+       <RefreshControl
+  refreshing={refreshing}
+  onRefresh={onRefresh}
+  tintColor="#f97316"
+  colors={["#f97316"]}
+  progressBackgroundColor="#121212"
+/>
+      }
+    >
       <Text style={styles.title}>Fire History</Text>
 
       <Text style={styles.subtitle}>

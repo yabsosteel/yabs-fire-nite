@@ -1,6 +1,13 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import {
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { supabase } from "../../lib/supabase";
 import {
@@ -16,6 +23,7 @@ export default function FireDetailsScreen() {
 
   const [event, setEvent] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [isSendingMessage, setIsSendingMessage] = useState(false);
@@ -392,6 +400,23 @@ export default function FireDetailsScreen() {
     });
   }
 
+  async function onRefresh() {
+    setRefreshing(true);
+
+    try {
+      await loadName();
+      await loadFireDetails();
+      await loadApprovedGuests();
+
+      if (event?.id) {
+        await loadChatMessages();
+        await markFireChatAsSeen(event.id);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   function renderPersonList(people: any[], emptyText: string) {
     if (people.length === 0) {
       return <Text style={styles.emptyResponseText}>{emptyText}</Text>;
@@ -428,7 +453,18 @@ export default function FireDetailsScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.screen}>
+    <ScrollView
+      contentContainerStyle={styles.screen}
+      refreshControl={
+        <RefreshControl
+  refreshing={refreshing}
+  onRefresh={onRefresh}
+  tintColor="#f97316"
+  colors={["#f97316"]}
+  progressBackgroundColor="#121212"
+/>
+      }
+    >
       <Pressable style={styles.backButton} onPress={() => router.back()}>
         <Text style={styles.backButtonText}>← Back</Text>
       </Pressable>
