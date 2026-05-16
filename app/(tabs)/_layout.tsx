@@ -1,7 +1,62 @@
-import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import * as Notifications from "expo-notifications";
+import { Tabs, useRouter } from "expo-router";
+import { useEffect } from "react";
 
 export default function TabLayout() {
+  const router = useRouter();
+
+  useEffect(() => {
+    async function handleLastNotificationResponse() {
+      const response = await Notifications.getLastNotificationResponseAsync();
+
+      if (!response) return;
+
+      const data = response.notification.request.content.data;
+
+      if (data?.eventId) {
+        router.push({
+          pathname: "/fire-details",
+          params: { eventId: String(data.eventId) },
+        });
+        return;
+      }
+
+      if (data?.screen === "host") {
+        router.push("/host");
+        return;
+      }
+
+      router.push("/");
+    }
+
+    handleLastNotificationResponse();
+
+    const responseSubscription =
+      Notifications.addNotificationResponseReceivedListener((response) => {
+        const data = response.notification.request.content.data;
+
+        if (data?.eventId) {
+          router.push({
+            pathname: "/fire-details",
+            params: { eventId: String(data.eventId) },
+          });
+          return;
+        }
+
+        if (data?.screen === "host") {
+          router.push("/host");
+          return;
+        }
+
+        router.push("/");
+      });
+
+    return () => {
+      responseSubscription.remove();
+    };
+  }, [router]);
+
   return (
     <Tabs
       screenOptions={{
