@@ -22,7 +22,7 @@ export default function HomeScreen() {
   const [event, setEvent] = useState<any>(null);
   const [upcomingFires, setUpcomingFires] = useState<any[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [announcement, setAnnouncement] = useState<any>(null);
+  const [announcements, setAnnouncements] = useState<any[]>([]);
   const [status, setStatus] = useState("Loading event...");
   const [message, setMessage] = useState("");
 
@@ -34,31 +34,30 @@ export default function HomeScreen() {
   const [isApproved, setIsApproved] = useState(false);
   const [approvalChecked, setApprovalChecked] = useState(false);
 
-  const [showHistory, setShowHistory] = useState(false);
-  const [history, setHistory] = useState<any[]>([]);
-  const [historyFilter, setHistoryFilter] = useState<
-    "all" | "going" | "maybe" | "not_going"
-  >("all");
 
   const [approvedGuests, setApprovedGuests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasUnreadChat, setHasUnreadChat] = useState(false);
-  const [latestChatCreatedAt, setLatestChatCreatedAt] = useState<string | null>(null);
+  const [latestChatCreatedAt, setLatestChatCreatedAt] = useState<string | null>(
+    null,
+  );
 
   const isHost =
     savedFirstName?.toLowerCase() === "rian" &&
     savedLastName?.toLowerCase() === "yablun";
 
+  const latestAnnouncement = announcements[0] || null;
+
   const currentGoingList = dedupePeople(
-    event?.rsvps?.filter((r: any) => r.response_status === "going") || []
+    event?.rsvps?.filter((r: any) => r.response_status === "going") || [],
   );
 
   const maybeList = dedupePeople(
-    event?.rsvps?.filter((r: any) => r.response_status === "maybe") || []
+    event?.rsvps?.filter((r: any) => r.response_status === "maybe") || [],
   );
 
   const notGoingList = dedupePeople(
-    event?.rsvps?.filter((r: any) => r.response_status === "not_going") || []
+    event?.rsvps?.filter((r: any) => r.response_status === "not_going") || [],
   );
 
   const goingCount = currentGoingList.length;
@@ -67,36 +66,36 @@ export default function HomeScreen() {
 
   const respondedKeys = new Set(
     (event?.rsvps || []).map((r: any) =>
-      `${r.first_name} ${r.last_name}`.toLowerCase().trim()
-    )
+      `${r.first_name} ${r.last_name}`.toLowerCase().trim(),
+    ),
   );
 
   const notRespondedList = dedupePeople(
     (approvedGuests || []).filter((guest: any) => {
-      const key = `${guest.first_name} ${guest.last_name}`
-        .toLowerCase()
-        .trim();
+      const key = `${guest.first_name} ${guest.last_name}`.toLowerCase().trim();
 
-      return key !== "rian yablun" && !respondedKeys.has(key);
-    })
+      return !respondedKeys.has(key);
+    }),
   );
 
-  const visibleHistory = history.filter((item: any) => {
-    const itemStatus = item.events?.status?.toLowerCase?.().trim();
-    return !item.events?.deleted_at && itemStatus !== "deleted";
-  });
-
-  const displayHistory =
-    historyFilter === "all"
-      ? visibleHistory
-      : visibleHistory.filter(
-          (item: any) => item.response_status === historyFilter
-        );
 
   useEffect(() => {
     loadEvent();
-    loadAnnouncement();
+    loadAnnouncements();
     loadName();
+
+    const announcementRefreshInterval = setInterval(() => {
+      loadAnnouncements();
+    }, 5000);
+
+    const rsvpRefreshInterval = setInterval(() => {
+      loadEvent();
+    }, 5000);
+
+    return () => {
+      clearInterval(announcementRefreshInterval);
+      clearInterval(rsvpRefreshInterval);
+    };
   }, []);
 
   useEffect(() => {
@@ -123,22 +122,23 @@ export default function HomeScreen() {
         { event: "*", schema: "public", table: "events" },
         () => {
           loadEvent();
-          loadAnnouncement();
-        }
+          loadAnnouncements();
+        },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "rsvps" },
         () => {
           loadEvent();
-        }
+        },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "announcements" },
         () => {
-          loadAnnouncement();
-        }
+          loadAnnouncements();
+          loadEvent();
+        },
       )
       .on(
         "postgres_changes",
@@ -152,7 +152,7 @@ export default function HomeScreen() {
           if (activeEventId && changedEventId === activeEventId) {
             loadUnreadChat(activeEventId);
           }
-        }
+        },
       )
       .subscribe();
 
@@ -164,17 +164,68 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       loadEvent();
-      loadAnnouncement();
+      loadAnnouncements();
+      loadApprovedGuests();
 
       if (event?.id) {
         loadUnreadChat(event.id);
       }
-
-      if (isHost) {
-        loadApprovedGuests();
-      }
-    }, [isHost, event?.id, savedFirstName, savedLastName])
+    }, [event?.id, savedFirstName, savedLastName]),
   );
+
+  useEffect(() => {
+    const announcementAppStateSubscription = AppState.addEventListener(
+      "change",
+      (nextAppState) => {
+        if (nextAppState === "active") {
+          loadAnnouncements();
+          loadEvent();
+        }
+      },
+    );
+
+    return () => {
+      announcementAppStateSubscription.remove();
+    };
+  }, []);
+
+
+  useEffect(() => {
+    const rsvpChannel = supabase
+      .channel("fire-rsvp-home")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "rsvps",
+        },
+        () => {
+          console.log("RSVP change detected — refreshing home screen");
+          loadEvent();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(rsvpChannel);
+    };
+  }, []);
+
+  useEffect(() => {
+    const appStateSubscription = AppState.addEventListener(
+      "change",
+      (nextAppState) => {
+        if (nextAppState === "active") {
+          loadEvent();
+        }
+      }
+    );
+
+    return () => {
+      appStateSubscription.remove();
+    };
+  }, []);
 
   useEffect(() => {
     const receivedSubscription = Notifications.addNotificationReceivedListener(
@@ -184,11 +235,11 @@ export default function HomeScreen() {
         if (activeEventId) {
           loadUnreadChat(activeEventId);
         }
-      }
+      },
     );
 
-    const responseSubscription = Notifications.addNotificationResponseReceivedListener(
-      (response) => {
+    const responseSubscription =
+      Notifications.addNotificationResponseReceivedListener((response) => {
         const data = response.notification.request.content.data;
 
         const activeEventId = eventIdRef.current;
@@ -200,8 +251,7 @@ export default function HomeScreen() {
         if (data?.screen === "home") {
           router.push("/");
         }
-      }
-    );
+      });
 
     return () => {
       receivedSubscription.remove();
@@ -209,11 +259,6 @@ export default function HomeScreen() {
     };
   }, [router]);
 
-  useEffect(() => {
-    if (isHost) {
-      loadApprovedGuests();
-    }
-  }, [isHost]);
 
   useEffect(() => {
     if (!event?.id || !savedFirstName || !savedLastName) return;
@@ -242,7 +287,7 @@ export default function HomeScreen() {
         if (nextAppState === "active") {
           refreshUnread();
         }
-      }
+      },
     );
 
     return () => {
@@ -261,9 +306,12 @@ export default function HomeScreen() {
   async function loadUnreadChat(fireEventId: string) {
     if (!fireEventId || !savedFirstName || !savedLastName) return;
 
+    const myFirstName = savedFirstName.trim().toLowerCase();
+    const myLastName = savedLastName.trim().toLowerCase();
+
     const { data, error } = await supabase
       .from("fire_chat")
-      .select("created_at")
+      .select("created_at, first_name, last_name")
       .eq("event_id", fireEventId)
       .order("created_at", { ascending: false })
       .limit(1)
@@ -280,7 +328,18 @@ export default function HomeScreen() {
       return;
     }
 
+    const latestFirstName = (data.first_name || "").trim().toLowerCase();
+    const latestLastName = (data.last_name || "").trim().toLowerCase();
+    const latestMessageIsMine =
+      latestFirstName === myFirstName && latestLastName === myLastName;
+
     setLatestChatCreatedAt(data.created_at);
+
+    if (latestMessageIsMine) {
+      await AsyncStorage.setItem(getChatSeenKey(fireEventId), data.created_at);
+      setHasUnreadChat(false);
+      return;
+    }
 
     const lastSeen = await AsyncStorage.getItem(getChatSeenKey(fireEventId));
 
@@ -306,7 +365,7 @@ export default function HomeScreen() {
     }
 
     const fireDateTime = new Date(
-      `${fireEvent.event_date}T${fireEvent.event_time}`
+      `${fireEvent.event_date}T${fireEvent.event_time}`,
     );
 
     const reminderTime = new Date(fireDateTime);
@@ -328,7 +387,7 @@ export default function HomeScreen() {
       (notification: any) =>
         notification.content?.data?.type === "fire_reminder" &&
         notification.content?.data?.eventId === fireEvent.id &&
-        notification.content?.data?.reminderAt === reminderAt
+        notification.content?.data?.reminderAt === reminderAt,
     );
 
     if (alreadyScheduled === "true" && matchingReminderAlreadyExists) {
@@ -338,7 +397,7 @@ export default function HomeScreen() {
     for (const notification of scheduledNotifications as any[]) {
       if (notification.content?.data?.type === "fire_reminder") {
         await Notifications.cancelScheduledNotificationAsync(
-          notification.identifier
+          notification.identifier,
         );
       }
     }
@@ -402,10 +461,10 @@ export default function HomeScreen() {
       day % 10 === 1 && day !== 11
         ? "st"
         : day % 10 === 2 && day !== 12
-        ? "nd"
-        : day % 10 === 3 && day !== 13
-        ? "rd"
-        : "th";
+          ? "nd"
+          : day % 10 === 3 && day !== 13
+            ? "rd"
+            : "th";
 
     return `${weekday}, ${month} ${day}${suffix}`;
   }
@@ -445,37 +504,21 @@ export default function HomeScreen() {
     return `${formatDisplayDate(dateString)} at ${time}`;
   }
 
-  function formatHistoryResponse(response: string) {
-    if (response === "going") return "Yes — Coming";
-    if (response === "maybe") return "Maybe";
-    return "No — Not Coming";
-  }
 
-  function formatRSVPDate(dateString: string) {
-    return new Date(dateString).toLocaleString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-  }
-
-  async function loadAnnouncement() {
+  async function loadAnnouncements() {
     const { data, error } = await supabase
       .from("announcements")
       .select("*")
-      .eq("is_active", true)
       .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(5);
 
-    if (!error && data) {
-      setAnnouncement(data);
-    } else {
-      setAnnouncement(null);
+    if (error) {
+      console.log("Error loading announcements:", error.message);
+      setAnnouncements([]);
+      return;
     }
+
+    setAnnouncements(data ?? []);
   }
 
   async function loadEvent() {
@@ -495,7 +538,7 @@ export default function HomeScreen() {
           last_name,
           response_status
         )
-      `
+      `,
       )
       .eq("status", "published")
       .is("deleted_at", null)
@@ -514,13 +557,12 @@ export default function HomeScreen() {
 
     setUpcomingFires(data);
 
-    const selectedFire =
-      data.find((fire: any) => fire.id === selectedEventId) || data[0];
+    const nextFire = data[0];
 
-    setSelectedEventId(selectedFire.id);
-    setEvent(selectedFire);
-    setStatus(selectedFire.title || "Next Fire");
-    setMessage(selectedFire.message || "");
+    setSelectedEventId(nextFire.id);
+    setEvent(nextFire);
+    setStatus(nextFire.title || "Next Fire");
+    setMessage(nextFire.message || "");
     setLoading(false);
   }
 
@@ -575,63 +617,14 @@ export default function HomeScreen() {
     setLastName("");
     setIsApproved(false);
     setApprovalChecked(true);
-    setHistory([]);
-    setShowHistory(false);
   }
 
-  async function loadHistory() {
-    if (!savedFirstName || !savedLastName) return;
-
-    if (showHistory) {
-      setShowHistory(false);
-      return;
-    }
-
-    await refreshHistory();
-    setShowHistory(true);
-  }
-
-  async function refreshHistory() {
-    if (!savedFirstName || !savedLastName) return;
-
-    let query = supabase
-      .from("rsvps")
-      .select(
-        `
-        *,
-        events!inner (
-          event_date,
-          event_time,
-          message,
-          status,
-          deleted_at
-        )
-      `
-      )
-      .is("events.deleted_at", null)
-      .neq("events.status", "deleted")
-      .order("created_at", { ascending: false });
-
-    if (!isHost) {
-      query = query.eq("first_name", savedFirstName).eq("last_name", savedLastName);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    setHistory(data ?? []);
-  }
 
   async function loadApprovedGuests() {
-    if (!isHost) return;
-
     const { data, error } = await supabase
       .from("approved_users")
       .select("*")
+      .eq("is_approved", true)
       .order("first_name", { ascending: true })
       .order("last_name", { ascending: true });
 
@@ -644,11 +637,12 @@ export default function HomeScreen() {
   }
 
   function selectUpcomingFire(fire: any) {
-    setSelectedEventId(fire.id);
-    setEvent(fire);
-    setStatus(fire.title || "Next Fire");
-    setMessage(fire.message || "");
-    loadUnreadChat(fire.id);
+    router.push({
+      pathname: "/fire-details",
+      params: {
+        eventId: fire.id,
+      },
+    });
   }
 
   async function openFireDetails() {
@@ -656,7 +650,7 @@ export default function HomeScreen() {
 
     await AsyncStorage.setItem(
       getChatSeenKey(event.id),
-      latestChatCreatedAt || new Date().toISOString()
+      latestChatCreatedAt || new Date().toISOString(),
     );
     setHasUnreadChat(false);
 
@@ -675,45 +669,23 @@ export default function HomeScreen() {
         <Text style={styles.subtitle}>
           {event
             ? "The next fire is locked in."
-            : announcement
-            ? "Latest host update"
-            : "No fire scheduled right now."}
+            : latestAnnouncement
+              ? "Latest host update"
+              : "No fire scheduled right now."}
         </Text>
       </View>
 
-      {upcomingFires.length > 1 && (
-        <View style={styles.upcomingCard}>
-          <Text style={styles.sectionTitle}>Upcoming Fires</Text>
-
-          {upcomingFires.map((fire: any) => (
-            <Pressable
-              key={fire.id}
-              onPress={() => selectUpcomingFire(fire)}
-              style={[
-                styles.upcomingFireButton,
-                selectedEventId === fire.id && styles.selectedUpcomingFireButton,
-              ]}
-            >
-              <Text style={styles.upcomingFireTitle}>
-                {formatFireDateTime(fire.event_date, fire.event_time)}
-              </Text>
-
-              <Text style={styles.upcomingFireMessage}>
-                {fire.message || "No message added."}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      )}
-
       <Pressable disabled={!event} onPress={openFireDetails}>
-        <Animated.View entering={FadeInUp.duration(500)} style={styles.heroCard}>
+        <Animated.View
+          entering={FadeInUp.duration(500)}
+          style={styles.heroCard}
+        >
           <Text style={styles.heroLabel}>
-            {event ? "NEXT FIRE" : announcement ? "ANNOUNCEMENT" : "STATUS"}
+            {event ? "NEXT FIRE" : latestAnnouncement ? "ANNOUNCEMENT" : "STATUS"}
           </Text>
 
           <Text style={styles.heroTitle}>
-            {event ? status : announcement ? "Fire Announcement" : status}
+            {event ? status : latestAnnouncement ? "Fire Announcement" : status}
           </Text>
 
           {event && (
@@ -725,11 +697,11 @@ export default function HomeScreen() {
           <Text style={styles.heroMessage}>
             {event
               ? message || "No message for this fire."
-              : announcement
-              ? announcement.message
-              : loading
-              ? "Loading..."
-              : "Check back soon."}
+              : latestAnnouncement
+                ? latestAnnouncement.message
+                : loading
+                  ? "Loading..."
+                  : "Check back soon."}
           </Text>
 
           {event && (
@@ -751,22 +723,79 @@ export default function HomeScreen() {
                 </View>
 
                 <View style={styles.statBox}>
-                  <Text style={styles.statNumber}>{notRespondedList.length}</Text>
+                  <Text style={styles.statNumber}>
+                    {notRespondedList.length}
+                  </Text>
                   <Text style={styles.statLabel}>No Reply</Text>
                 </View>
               </View>
 
               {hasUnreadChat && (
                 <View style={styles.unreadChatPill}>
-                  <Text style={styles.unreadChatPillText}>New chat messages</Text>
+                  <Text style={styles.unreadChatPillText}>
+                    New chat messages
+                  </Text>
                 </View>
               )}
 
-              <Text style={styles.tapHint}>Tap to RSVP, view guests, and chat</Text>
+              <Text style={styles.tapHint}>
+                Tap to RSVP, view guests, and chat
+              </Text>
             </>
           )}
         </Animated.View>
       </Pressable>
+
+      {announcements.length > 0 ? (
+        <View style={styles.announcementCard}>
+          <Text style={styles.announcementLabel}>Host Announcements</Text>
+
+          {announcements.map((item: any, index: number) => (
+            <View
+              key={item.id || index}
+              style={[
+                styles.announcementItem,
+                index === announcements.length - 1 && styles.lastAnnouncementItem,
+              ]}
+            >
+              <Text style={styles.announcementMessage}>{item.message}</Text>
+
+              {item.created_at ? (
+                <Text style={styles.announcementDate}>
+                  {new Date(item.created_at).toLocaleString()}
+                </Text>
+              ) : null}
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+
+      {upcomingFires.length > 1 && (
+        <View style={styles.upcomingCard}>
+          <Text style={styles.sectionTitle}>Upcoming Fires</Text>
+
+          {upcomingFires.map((fire: any) => (
+            <Pressable
+              key={fire.id}
+              onPress={() => selectUpcomingFire(fire)}
+              style={[
+                styles.upcomingFireButton,
+                selectedEventId === fire.id &&
+                  styles.selectedUpcomingFireButton,
+              ]}
+            >
+              <Text style={styles.upcomingFireTitle}>
+                {formatFireDateTime(fire.event_date, fire.event_time)}
+              </Text>
+
+              <Text style={styles.upcomingFireMessage}>
+                {fire.message || "No message added."}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
 
       {!savedFirstName || !savedLastName ? (
         <View style={styles.mainCard}>
@@ -805,92 +834,10 @@ export default function HomeScreen() {
               <Text style={styles.hostAccess}>Host Access Enabled 🔥</Text>
             )}
 
-            <Pressable onPress={loadHistory} style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>
-                {showHistory
-                  ? "Hide History"
-                  : isHost
-                  ? "View All History"
-                  : "View My History"}
-              </Text>
-            </Pressable>
-
             <Pressable onPress={resetName} style={styles.secondaryButton}>
               <Text style={styles.secondaryButtonText}>Reset Name</Text>
             </Pressable>
           </View>
-
-          {showHistory && (
-            <View style={styles.historyCard}>
-              <Text style={styles.historyTitle}>
-                {isHost ? "All Fire History" : "My Fire History"}
-              </Text>
-
-              <View style={styles.filterRow}>
-                <FilterButton
-                  label="All"
-                  active={historyFilter === "all"}
-                  onPress={() => setHistoryFilter("all")}
-                />
-                <FilterButton
-                  label="Going"
-                  active={historyFilter === "going"}
-                  onPress={() => setHistoryFilter("going")}
-                />
-                <FilterButton
-                  label="Maybe"
-                  active={historyFilter === "maybe"}
-                  onPress={() => setHistoryFilter("maybe")}
-                />
-                <FilterButton
-                  label="Not Going"
-                  active={historyFilter === "not_going"}
-                  onPress={() => setHistoryFilter("not_going")}
-                />
-              </View>
-
-              {displayHistory.length === 0 ? (
-                <Text style={styles.emptyText}>No history matches this filter.</Text>
-              ) : (
-                displayHistory.map((item: any) => (
-                  <View key={item.id} style={styles.historyItem}>
-                    <Text style={styles.historyName}>{getDisplayName(item)}</Text>
-
-                    <Text style={styles.historyText}>
-                      Response: {formatHistoryResponse(item.response_status)}
-                    </Text>
-
-                    <Text style={styles.historyText}>
-                      Fire:{" "}
-                      {item.events?.event_date
-                        ? formatDisplayDate(item.events.event_date)
-                        : ""}
-                      {item.events?.event_time
-                        ? ` at ${formatTime(item.events.event_time)}`
-                        : ""}
-                    </Text>
-
-                    {item.events?.status && (
-                      <Text
-                        style={[
-                          styles.historyText,
-                          item.events.status === "cancelled" && {
-                            color: "#ef4444",
-                          },
-                        ]}
-                      >
-                        Status: {item.events.status}
-                      </Text>
-                    )}
-
-                    <Text style={styles.historyText}>
-                      RSVP Date: {formatRSVPDate(item.created_at)}
-                    </Text>
-                  </View>
-                ))
-              )}
-            </View>
-          )}
 
           {event && approvalChecked && !isApproved && (
             <Text style={styles.notApprovedText}>
@@ -903,98 +850,123 @@ export default function HomeScreen() {
   );
 }
 
-function FilterButton({
-  label,
-  active,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[
-        styles.filterButton,
-        {
-          backgroundColor: active ? "#f97316" : "#232326",
-          borderColor: active ? "#f97316" : "#2f2f35",
-        },
-      ]}
-    >
-      <Text style={{ color: active ? "#111" : "#fff", fontWeight: "700" }}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
+  announcementItem: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#333",
+    paddingBottom: 10,
+    marginBottom: 10,
+  },
+  lastAnnouncementItem: {
+    borderBottomWidth: 0,
+    paddingBottom: 0,
+    marginBottom: 0,
+  },
+
+  announcementCard: {
+    width: "100%",
+    backgroundColor: "#24170f",
+    borderRadius: 22,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#f97316",
+    marginTop: 14,
+    marginBottom: 8,
+  },
+  announcementLabel: {
+    color: "#f97316",
+    fontSize: 12,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    marginBottom: 8,
+  },
+  announcementMessage: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "700",
+    lineHeight: 22,
+  },
+  announcementDate: {
+    color: "#aaa",
+    fontSize: 12,
+    marginTop: 10,
+  },
   screen: {
     flexGrow: 1,
-    backgroundColor: "#0f0f10",
+    backgroundColor: "#121212",
     padding: 20,
-    paddingBottom: 40,
+    paddingBottom: 50,
     alignItems: "center",
   },
   header: {
     width: "100%",
     marginTop: 10,
-    marginBottom: 18,
+    marginBottom: 20,
     alignItems: "center",
   },
   appTitle: {
     color: "#fff",
-    fontSize: 30,
+    fontSize: 34,
     fontWeight: "900",
     textAlign: "center",
+    letterSpacing: -0.5,
   },
   subtitle: {
     color: "#b3b3ba",
-    marginTop: 6,
+    marginTop: 8,
     fontSize: 15,
     textAlign: "center",
+    lineHeight: 21,
   },
   heroCard: {
     width: "100%",
-    backgroundColor: "#18181b",
-    borderRadius: 22,
-    padding: 20,
+    backgroundColor: "#1f1f1f",
+    borderRadius: 30,
+    padding: 24,
     borderWidth: 1,
-    borderColor: "#2f2f35",
+    borderColor: "#333",
     marginTop: 8,
+    marginBottom: 4,
+    shadowColor: "#000",
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    shadowOffset: {
+      width: 0,
+      height: 6,
+    },
+    elevation: 6,
   },
   heroLabel: {
     color: "#f97316",
     fontWeight: "900",
-    marginBottom: 6,
+    marginBottom: 10,
     letterSpacing: 1,
     fontSize: 13,
   },
   heroTitle: {
     color: "#fff",
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: "900",
     marginBottom: 8,
   },
   heroDate: {
-    color: "#fff",
-    fontSize: 26,
+    color: "#facc15",
+    fontSize: 22,
     fontWeight: "900",
-    lineHeight: 34,
+    lineHeight: 36,
   },
   heroMessage: {
-    color: "#b3b3ba",
-    marginTop: 10,
+    color: "#ddd",
+    marginTop: 8,
     marginBottom: 20,
-    fontSize: 15,
-    lineHeight: 22,
+    fontSize: 17,
+    lineHeight: 26,
   },
   tapHint: {
     color: "#f97316",
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "900",
     textAlign: "center",
     marginTop: 16,
   },
@@ -1002,8 +974,8 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     marginTop: 14,
     backgroundColor: "#ef4444",
-    paddingVertical: 7,
-    paddingHorizontal: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: 999,
   },
   unreadChatPillText: {
@@ -1013,20 +985,20 @@ const styles = StyleSheet.create({
   },
   mainCard: {
     width: "100%",
-    backgroundColor: "#18181b",
-    borderRadius: 18,
-    padding: 18,
+    backgroundColor: "#1f1f1f",
+    borderRadius: 24,
+    padding: 20,
     borderWidth: 1,
-    borderColor: "#2f2f35",
-    marginTop: 14,
+    borderColor: "#333",
+    marginTop: 16,
   },
   cardLabel: {
     color: "#f97316",
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "900",
     textTransform: "uppercase",
-    letterSpacing: 0.8,
-    marginBottom: 8,
+    letterSpacing: 1,
+    marginBottom: 10,
   },
   statsRow: {
     flexDirection: "row",
@@ -1035,140 +1007,106 @@ const styles = StyleSheet.create({
   },
   statBox: {
     width: "48%",
-    backgroundColor: "#232326",
-    borderRadius: 14,
-    paddingVertical: 12,
+    backgroundColor: "#2a2a2a",
+    borderRadius: 18,
+    paddingVertical: 15,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#2f2f35",
+    borderColor: "#3a3a3a",
   },
   statNumber: {
-    color: "#fff",
+    color: "#f97316",
     fontSize: 22,
     fontWeight: "900",
   },
   statLabel: {
-    color: "#b3b3ba",
-    marginTop: 3,
-    fontSize: 12,
-    fontWeight: "700",
+    color: "#bbb",
+    marginTop: 4,
+    fontSize: 13,
+    fontWeight: "800",
   },
   sectionTitle: {
     color: "#fff",
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: "900",
     marginBottom: 12,
   },
   emptyText: {
-    color: "#8e8e95",
+    color: "#888",
     marginTop: 8,
-    fontSize: 14,
+    fontSize: 15,
+    lineHeight: 22,
   },
   nameInput: {
     marginTop: 10,
-    backgroundColor: "#232326",
+    backgroundColor: "#121212",
     color: "#fff",
-    padding: 12,
-    borderRadius: 10,
+    padding: 14,
+    borderRadius: 16,
     textAlign: "center",
+    borderWidth: 1,
+    borderColor: "#333",
+    fontSize: 16,
   },
   primaryButton: {
-    marginTop: 12,
+    marginTop: 14,
     backgroundColor: "#f97316",
-    paddingVertical: 13,
-    borderRadius: 12,
+    paddingVertical: 16,
+    borderRadius: 18,
+    alignItems: "center",
   },
   primaryButtonText: {
     color: "#111",
+    fontSize: 16,
     fontWeight: "900",
     textAlign: "center",
   },
   secondaryButton: {
     marginTop: 10,
-    backgroundColor: "#232326",
-    paddingVertical: 12,
-    borderRadius: 10,
+    backgroundColor: "#2a2a2a",
+    paddingVertical: 14,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#2f2f35",
+    borderColor: "#333",
   },
   secondaryButtonText: {
     color: "#fff",
+    fontSize: 15,
     fontWeight: "800",
     textAlign: "center",
   },
   accountName: {
     color: "#fff",
-    fontSize: 18,
-    fontWeight: "800",
+    fontSize: 20,
+    fontWeight: "900",
   },
   hostAccess: {
     color: "#22c55e",
-    marginTop: 6,
-    fontWeight: "800",
-  },
-  historyCard: {
-    marginTop: 20,
-    width: "100%",
-    backgroundColor: "#18181b",
-    padding: 15,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#2f2f35",
-  },
-  historyTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "900",
-  },
-  filterRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    marginTop: 6,
-  },
-  filterButton: {
-    marginRight: 8,
     marginTop: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  historyItem: {
-    marginTop: 10,
-    padding: 10,
-    backgroundColor: "#232326",
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "#2f2f35",
-  },
-  historyName: {
-    color: "#fff",
-    fontWeight: "800",
-  },
-  historyText: {
-    color: "#b3b3ba",
-    marginTop: 3,
+    fontWeight: "900",
   },
   notApprovedText: {
     color: "#ef4444",
     marginTop: 20,
     textAlign: "center",
+    fontWeight: "800",
+    lineHeight: 22,
   },
   upcomingCard: {
     width: "100%",
-    backgroundColor: "#18181b",
-    borderRadius: 18,
-    padding: 16,
+    backgroundColor: "#1f1f1f",
+    borderRadius: 24,
+    padding: 18,
     borderWidth: 1,
-    borderColor: "#2f2f35",
+    borderColor: "#333",
     marginBottom: 16,
   },
   upcomingFireButton: {
-    backgroundColor: "#232326",
-    borderRadius: 14,
-    padding: 14,
+    backgroundColor: "#2a2a2a",
+    borderRadius: 18,
+    padding: 12,
     borderWidth: 1,
-    borderColor: "#2f2f35",
+    borderColor: "#333",
     marginTop: 10,
   },
   selectedUpcomingFireButton: {
@@ -1177,12 +1115,13 @@ const styles = StyleSheet.create({
   },
   upcomingFireTitle: {
     color: "#fff",
-    fontSize: 15,
-    fontWeight: "800",
+    fontSize: 16,
+    fontWeight: "900",
   },
   upcomingFireMessage: {
-    color: "#b3b3ba",
-    marginTop: 5,
-    fontSize: 14,
+    color: "#bbb",
+    marginTop: 6,
+    fontSize: 15,
+    lineHeight: 21,
   },
 });

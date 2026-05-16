@@ -17,33 +17,33 @@ import {
 } from "../../lib/notifications";
 
 function Section({
-    title,
-    subtitle,
-    open,
-    onPress,
-    children,
-  }: {
-    title: string;
-    subtitle?: string;
-    open: boolean;
-    onPress: () => void;
-    children: any;
-  }) {
-    return (
-      <View style={styles.card}>
-        <Pressable onPress={onPress} style={styles.sectionHeader}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.cardLabel}>{title}</Text>
-            {subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}
-          </View>
+  title,
+  subtitle,
+  open,
+  onPress,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  open: boolean;
+  onPress: () => void;
+  children: any;
+}) {
+  return (
+    <View style={styles.card}>
+      <Pressable onPress={onPress} style={styles.sectionHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.cardLabel}>{title}</Text>
+          {subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}
+        </View>
 
-          <Text style={styles.chevron}>{open ? "▼" : "▶"}</Text>
-        </Pressable>
+        <Text style={styles.chevron}>{open ? "▼" : "▶"}</Text>
+      </Pressable>
 
-        {open && <View style={{ marginTop: 10 }}>{children}</View>}
-      </View>
-    );
-  }
+      {open && <View style={{ marginTop: 10 }}>{children}</View>}
+    </View>
+  );
+}
 
 export default function HostScreen() {
   const [newEventDate, setNewEventDate] = useState("");
@@ -315,29 +315,30 @@ export default function HostScreen() {
       }
 
       const { data, error } = await supabase
-  .from("events")
-  .insert({
-    title: "Yabs Fire Nite",
-    event_date: newEventDate,
-    event_time: newEventTime,
-    message: newEventMessage,
-    status: "published",
-  })
-  .select()
-  .single();
+        .from("events")
+        .insert({
+          title: "Yabs Fire Nite",
+          event_date: newEventDate,
+          event_time: newEventTime,
+          message: newEventMessage,
+          status: "published",
+        })
+        .select()
+        .single();
 
-if (error) {
-  alert(error.message);
-  return;
-}
+      if (error) {
+        alert(error.message);
+        return;
+      }
 
-await supabase.from("rsvps").insert({
-  event_id: data.id,
-  first_name: "Rian",
-  last_name: "Yablun",
-  name: "Rian Yablun",
-  response_status: "going",
-});
+      await supabase.from("rsvps").insert({
+        event_id: data.id,
+        first_name: "Rian",
+        last_name: "Yablun",
+        name: "Rian Yablun",
+        response_status: "going",
+      });
+
       await sendPushNotificationToAll(
         "🔥 New Fire",
         `${formatFireDateTime(newEventDate, newEventTime)} — Tap to RSVP`
@@ -541,171 +542,172 @@ await supabase.from("rsvps").insert({
   }
 
   async function createReminderList(reminderType: "tomorrow" | "two_hour") {
-  const activeFire = publishedFires[0];
+    const activeFire = publishedFires[0];
 
-  if (!activeFire?.id) {
-    alert("There is no active fire for reminders.");
-    return;
+    if (!activeFire?.id) {
+      alert("There is no active fire for reminders.");
+      return;
+    }
+
+    const yesRsvps = dedupePeople(
+      activeFire.rsvps?.filter((r: any) => r.response_status === "going") || []
+    );
+
+    if (yesRsvps.length === 0) {
+      alert("No RSVP Yes guests found for this fire.");
+      return;
+    }
+
+    const { data: existingRecipients, error: existingError } = await supabase
+      .from("reminder_recipients")
+      .select("*")
+      .eq("event_id", activeFire.id)
+      .eq("reminder_type", reminderType);
+
+    if (existingError) {
+      alert(existingError.message);
+      return;
+    }
+
+    const existingKeys = new Set(
+      (existingRecipients || []).map((person: any) => getPersonKey(person))
+    );
+
+    const newRecipientsOnly = yesRsvps.filter(
+      (person: any) => !existingKeys.has(getPersonKey(person))
+    );
+
+    if (newRecipientsOnly.length === 0) {
+      alert("Reminder list already exists. No duplicates were added.");
+      return;
+    }
+
+    const recipientsToInsert = newRecipientsOnly.map((person: any) => ({
+      event_id: activeFire.id,
+      name: getDisplayName(person),
+      first_name: person.first_name || null,
+      last_name: person.last_name || null,
+      response_status: person.response_status,
+      reminder_type: reminderType,
+    }));
+
+    const { error } = await supabase
+      .from("reminder_recipients")
+      .insert(recipientsToInsert);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    alert("Reminder list updated.");
+    loadReminderRecipients();
   }
-
-  const yesRsvps = dedupePeople(
-    activeFire.rsvps?.filter((r: any) => r.response_status === "going") || []
-  );
-
-  if (yesRsvps.length === 0) {
-    alert("No RSVP Yes guests found for this fire.");
-    return;
-  }
-
-  const { data: existingRecipients, error: existingError } = await supabase
-    .from("reminder_recipients")
-    .select("*")
-    .eq("event_id", activeFire.id)
-    .eq("reminder_type", reminderType);
-
-  if (existingError) {
-    alert(existingError.message);
-    return;
-  }
-
-  const existingKeys = new Set(
-    (existingRecipients || []).map((person: any) => getPersonKey(person))
-  );
-
-  const newRecipientsOnly = yesRsvps.filter(
-    (person: any) => !existingKeys.has(getPersonKey(person))
-  );
-
-  if (newRecipientsOnly.length === 0) {
-    alert("Reminder list already exists. No duplicates were added.");
-    return;
-  }
-
-  const recipientsToInsert = newRecipientsOnly.map((person: any) => ({
-    event_id: activeFire.id,
-    name: getDisplayName(person),
-    first_name: person.first_name || null,
-    last_name: person.last_name || null,
-    response_status: person.response_status,
-    reminder_type: reminderType,
-  }));
-
-  const { error } = await supabase
-    .from("reminder_recipients")
-    .insert(recipientsToInsert);
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  alert("Reminder list updated.");
-  loadReminderRecipients();
-}
 
   async function addApprovedGuest() {
-  const cleanFirstName = newGuestFirstName.trim();
-  const cleanLastName = newGuestLastName.trim();
+    const cleanFirstName = newGuestFirstName.trim();
+    const cleanLastName = newGuestLastName.trim();
 
-  if (!cleanFirstName || !cleanLastName) {
-    alert("Please enter first and last name.");
-    return;
+    if (!cleanFirstName || !cleanLastName) {
+      alert("Please enter first and last name.");
+      return;
+    }
+
+    const { data: existingGuest, error: lookupError } = await supabase
+      .from("approved_users")
+      .select("*")
+      .ilike("first_name", cleanFirstName)
+      .ilike("last_name", cleanLastName)
+      .maybeSingle();
+
+    if (lookupError) {
+      alert(lookupError.message);
+      return;
+    }
+
+    if (existingGuest) {
+      const { error } = await supabase
+        .from("approved_users")
+        .update({ is_approved: true })
+        .eq("id", existingGuest.id);
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    } else {
+      const { error } = await supabase.from("approved_users").insert({
+        first_name: cleanFirstName,
+        last_name: cleanLastName,
+        is_approved: true,
+      });
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    }
+
+    alert(`${cleanFirstName} ${cleanLastName} is approved.`);
+    setNewGuestFirstName("");
+    setNewGuestLastName("");
+    loadApprovedGuests();
   }
 
-  const { data: existingGuest, error: lookupError } = await supabase
-    .from("approved_users")
-    .select("*")
-    .ilike("first_name", cleanFirstName)
-    .ilike("last_name", cleanLastName)
-    .maybeSingle();
+  async function deactivateGuest(guest: any) {
+    const { error } = await supabase
+      .from("approved_users")
+      .update({ is_approved: false })
+      .eq("id", guest.id);
 
-  if (lookupError) {
-    alert(lookupError.message);
-    return;
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    loadApprovedGuests();
   }
 
-  if (existingGuest) {
+  async function reactivateGuest(guest: any) {
     const { error } = await supabase
       .from("approved_users")
       .update({ is_approved: true })
-      .eq("id", existingGuest.id);
+      .eq("id", guest.id);
 
     if (error) {
       alert(error.message);
       return;
     }
-  } else {
-    const { error } = await supabase.from("approved_users").insert({
-      first_name: cleanFirstName,
-      last_name: cleanLastName,
-      is_approved: true,
-    });
 
-    if (error) {
-      alert(error.message);
-      return;
-    }
+    loadApprovedGuests();
   }
 
-  alert(`${cleanFirstName} ${cleanLastName} is approved.`);
-  setNewGuestFirstName("");
-  setNewGuestLastName("");
-  loadApprovedGuests();
-}
-  async function deactivateGuest(guest: any) {
-  const { error } = await supabase
-    .from("approved_users")
-    .update({ is_approved: false })
-    .eq("id", guest.id);
+  async function deleteGuest(guest: any) {
+    Alert.alert(
+      "Delete Guest?",
+      `This will remove ${getDisplayName(guest)} from the app.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            const { error } = await supabase
+              .from("approved_users")
+              .delete()
+              .eq("id", guest.id);
 
-  if (error) {
-    alert(error.message);
-    return;
-  }
+            if (error) {
+              alert(error.message);
+              return;
+            }
 
-  loadApprovedGuests();
-}
-
- async function reactivateGuest(guest: any) {
-  const { error } = await supabase
-    .from("approved_users")
-    .update({ is_approved: true })
-    .eq("id", guest.id);
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  loadApprovedGuests();
-}
-
-async function deleteGuest(guest: any) {
-  Alert.alert(
-    "Delete Guest?",
-    `This will remove ${getDisplayName(guest)} from the app.`,
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          const { error } = await supabase
-            .from("approved_users")
-            .delete()
-            .eq("id", guest.id);
-
-          if (error) {
-            alert(error.message);
-            return;
-          }
-
-          loadApprovedGuests();
+            loadApprovedGuests();
+          },
         },
-      },
-    ]
-  );
-}
+      ]
+    );
+  }
 
   function renderFireWithRsvps(fire: any) {
     const yesList = dedupePeople(
@@ -796,7 +798,8 @@ async function deleteGuest(guest: any) {
           Manage fires, guests, announcements, reminders, and RSVP history.
         </Text>
       </View>
-<Section
+
+      <Section
         title={isEditing ? "Edit Selected Fire" : "Create New Fire"}
         subtitle={isEditing ? "Update the selected fire" : "Schedule the next fire"}
         open={showCreateEditFire}
@@ -855,15 +858,15 @@ async function deleteGuest(guest: any) {
         )}
 
         <TextInput
-  placeholder="Optional message"
-  placeholderTextColor="#888"
-  value={newEventMessage}
-  onChangeText={setNewEventMessage}
-  style={styles.textInput}
-  multiline
-  blurOnSubmit={false}
-  textAlignVertical="top"
-/>
+          placeholder="Optional message"
+          placeholderTextColor="#888"
+          value={newEventMessage}
+          onChangeText={setNewEventMessage}
+          style={styles.textInput}
+          multiline
+          blurOnSubmit={false}
+          textAlignVertical="top"
+        />
 
         {isEditing ? (
           <>
@@ -893,6 +896,7 @@ async function deleteGuest(guest: any) {
           </Pressable>
         )}
       </Section>
+
       <Section
         title="Fire Management"
         subtitle={`${publishedFires.length} upcoming fire(s)`}
@@ -918,10 +922,6 @@ async function deleteGuest(guest: any) {
                 {fire.message || "No message added."}
               </Text>
 
-              <Text style={styles.fireMeta}>
-                Yes: {dedupePeople(fire.rsvps?.filter((r: any) => r.response_status === "going") || []).length} | Maybe: {dedupePeople(fire.rsvps?.filter((r: any) => r.response_status === "maybe") || []).length} | No: {dedupePeople(fire.rsvps?.filter((r: any) => r.response_status === "not_going") || []).length}
-              </Text>
-
               <Pressable
                 onPress={() => loadFireForEditing(fire)}
                 style={styles.primaryButton}
@@ -945,7 +945,6 @@ async function deleteGuest(guest: any) {
         </Pressable>
       </Section>
 
-      
       <Section
         title="Fire History + RSVPs"
         subtitle={`${filteredFireHistory.length} fire(s) shown`}
@@ -1115,8 +1114,8 @@ async function deleteGuest(guest: any) {
           <View key={guest.id} style={styles.fireCard}>
             <Text style={styles.fireTitle}>{getDisplayName(guest)}</Text>
             <Text style={styles.fireMeta}>
-  Status: {guest.is_approved ? "Approved" : "Pending / Not Approved"}
-</Text>
+              Status: {guest.is_approved ? "Approved" : "Pending / Not Approved"}
+            </Text>
 
             {guest.is_approved ? (
               <Pressable
@@ -1125,7 +1124,6 @@ async function deleteGuest(guest: any) {
               >
                 <Text style={styles.buttonText}>Deactivate Guest</Text>
               </Pressable>
-              
             ) : (
               <Pressable
                 onPress={() => reactivateGuest(guest)}
@@ -1134,13 +1132,13 @@ async function deleteGuest(guest: any) {
                 <Text style={styles.successButtonText}>Reactivate Guest</Text>
               </Pressable>
             )}
-<Pressable
-  onPress={() => deleteGuest(guest)}
-  style={styles.deleteButton}
->
-  <Text style={styles.buttonText}>Delete Guest</Text>
-</Pressable>
 
+            <Pressable
+              onPress={() => deleteGuest(guest)}
+              style={styles.deleteButton}
+            >
+              <Text style={styles.buttonText}>Delete Guest</Text>
+            </Pressable>
           </View>
         ))}
       </Section>
@@ -1390,10 +1388,10 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   deleteGuestButton: {
-  backgroundColor: "#991b1b",
-  padding: 12,
-  borderRadius: 10,
-  marginTop: 8,
-  alignItems: "center",
-},
+    backgroundColor: "#991b1b",
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 8,
+    alignItems: "center",
+  },
 });
