@@ -31,6 +31,7 @@ export default function FireDetailsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [reactions, setReactions] = useState<any[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [countdownText, setCountdownText] = useState("");
   const [weather, setWeather] = useState<any>(null);
@@ -95,6 +96,7 @@ export default function FireDetailsScreen() {
   useEffect(() => {
     if (event?.id) {
       loadChatMessages();
+      loadReactions();
       markFireChatAsSeen(event.id);
     }
   }, [event?.id, savedFirstName, savedLastName]);
@@ -137,6 +139,17 @@ export default function FireDetailsScreen() {
 
             return [...currentMessages, newMessage];
           });
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "fire_chat_reactions",
+        },
+        () => {
+          loadReactions();
         }
       )
       .subscribe();
@@ -334,6 +347,48 @@ export default function FireDetailsScreen() {
     }
 
     setChatMessages(data ?? []);
+  }
+
+  async function loadReactions() {
+    const { data, error } = await supabase
+      .from("fire_chat_reactions")
+      .select("*");
+
+    if (error) {
+      console.log("Error loading chat reactions:", error.message);
+      return;
+    }
+
+    setReactions(data ?? []);
+  }
+
+  async function addReaction(chatId: string, reaction: string) {
+    if (!savedFirstName || !savedLastName) return;
+
+    const { error } = await supabase.from("fire_chat_reactions").upsert(
+      {
+        chat_id: chatId,
+        first_name: savedFirstName,
+        last_name: savedLastName,
+        reaction,
+      },
+      {
+        onConflict: "chat_id,first_name,last_name,reaction",
+      }
+    );
+
+    if (error) {
+      showErrorToast(error.message);
+      return;
+    }
+
+    loadReactions();
+  }
+
+  function getReactionCount(chatId: string, reaction: string) {
+    return reactions.filter(
+      (item: any) => item.chat_id === chatId && item.reaction === reaction
+    ).length;
   }
 
   async function sendChatMessage() {
@@ -912,6 +967,24 @@ export default function FireDetailsScreen() {
                     {chat.message ? (
                       <Text style={styles.chatText}>{chat.message}</Text>
                     ) : null}
+
+                    <View style={styles.reactionRow}>
+                      {["🔥", "😂", "👍"].map((emoji) => {
+                        const count = getReactionCount(chat.id, emoji);
+
+                        return (
+                          <Pressable
+                            key={emoji}
+                            style={styles.reactionButton}
+                            onPress={() => addReaction(chat.id, emoji)}
+                          >
+                            <Text style={styles.reactionText}>
+                              {emoji} {count > 0 ? count : ""}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
                   </View>
                 </View>
               );
@@ -1344,6 +1417,24 @@ const styles = {
     marginTop: 8,
     marginBottom: 8,
     backgroundColor: "#27272a",
+  },
+  reactionRow: {
+    flexDirection: "row" as const,
+    gap: 8,
+    marginTop: 8,
+  },
+  reactionButton: {
+    backgroundColor: "#27272a",
+    borderRadius: 14,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: "#3f3f46",
+  },
+  reactionText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700" as const,
   },
   modalOverlay: {
     flex: 1,
