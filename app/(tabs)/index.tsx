@@ -653,6 +653,45 @@ export default function HomeScreen() {
     setLoading(false);
   }
 
+
+  async function loadUnreadChatStatus(eventId: string) {
+    if (!savedFirstName || !savedLastName) return;
+
+    const { data: latestChat } = await supabase
+      .from("fire_chat")
+      .select("created_at")
+      .eq("event_id", eventId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!latestChat?.created_at) {
+      setHasUnreadChat(false);
+      setLatestChatCreatedAt(null);
+      return;
+    }
+
+    setLatestChatCreatedAt(latestChat.created_at);
+
+    const { data: readData } = await supabase
+      .from("fire_chat_reads")
+      .select("last_seen_at")
+      .eq("event_id", eventId)
+      .eq("first_name", savedFirstName)
+      .eq("last_name", savedLastName)
+      .maybeSingle();
+
+    if (!readData?.last_seen_at) {
+      setHasUnreadChat(true);
+      return;
+    }
+
+    setHasUnreadChat(
+      new Date(latestChat.created_at) > new Date(readData.last_seen_at)
+    );
+  }
+
+
   async function loadName() {
     const storedFirstName = await AsyncStorage.getItem("first_name");
     const storedLastName = await AsyncStorage.getItem("last_name");
@@ -1309,4 +1348,20 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
   },
+  unreadBadge: {
+    backgroundColor: "#ef4444",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    alignSelf: "flex-start" as const,
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  unreadBadgeText: {
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: "800" as const,
+    letterSpacing: 0.5,
+  },
+
 });

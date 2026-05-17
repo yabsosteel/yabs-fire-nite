@@ -14,13 +14,29 @@ import {
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import Toast from "react-native-toast-message";
 import { supabase } from "../../lib/supabase";
-import { GIPHY_API_KEY } from "../../lib/giphy";
 import { loadFireWeather } from "../../lib/weather";
+import { GIPHY_API_KEY } from "../../lib/giphy";
 import {
   sendFireChatNotification,
   sendPushNotificationToHosts,
   sendRSVPNotificationToAttendees,
 } from "../../lib/notifications";
+
+type GiphyResult = {
+  id: string;
+  title?: string;
+  images?: {
+    fixed_width?: {
+      url?: string;
+    };
+    downsized_medium?: {
+      url?: string;
+    };
+    original?: {
+      url?: string;
+    };
+  };
+};
 
 export default function FireDetailsScreen() {
   const router = useRouter();
@@ -31,21 +47,20 @@ export default function FireDetailsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
-  const [reactions, setReactions] = useState<any[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [countdownText, setCountdownText] = useState("");
   const [weather, setWeather] = useState<any>(null);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
-  const [gifModalVisible, setGifModalVisible] = useState(false);
-  const [gifSearch, setGifSearch] = useState("");
-  const [gifResults, setGifResults] = useState<any[]>([]);
-  const [gifLoading, setGifLoading] = useState(false);
   const [savedFirstName, setSavedFirstName] = useState<string | null>(null);
   const [savedLastName, setSavedLastName] = useState<string | null>(null);
   const [approvedGuests, setApprovedGuests] = useState<any[]>([]);
   const [myRSVP, setMyRSVP] = useState<"going" | "maybe" | "not_going" | null>(
     null
   );
+  const [isGiphyOpen, setIsGiphyOpen] = useState(false);
+  const [giphySearch, setGiphySearch] = useState("");
+  const [giphyResults, setGiphyResults] = useState<GiphyResult[]>([]);
+  const [isLoadingGiphy, setIsLoadingGiphy] = useState(false);
 
   const goingList = dedupePeople(
     event?.rsvps?.filter((r: any) => r.response_status === "going") || []
@@ -96,7 +111,6 @@ export default function FireDetailsScreen() {
   useEffect(() => {
     if (event?.id) {
       loadChatMessages();
-      loadReactions();
       markFireChatAsSeen(event.id);
     }
   }, [event?.id, savedFirstName, savedLastName]);
@@ -115,44 +129,34 @@ export default function FireDetailsScreen() {
   useEffect(() => {
     if (!event?.id) return;
 
-    const channel = supabase
-      .channel(`fire-chat-details-${event.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "fire_chat",
-          filter: `event_id=eq.${event.id}`,
-        },
-        (payload) => {
-          const newMessage = payload.new;
+    const channel = supabase.channel(`fire-chat-details-${event.id}`);
 
-          markFireChatAsSeen(event.id);
+    channel.on(
+      "postgres_changes",
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "fire_chat",
+        filter: `event_id=eq.${event.id}`,
+      },
+      (payload) => {
+        const newMessage = payload.new;
 
-          setChatMessages((currentMessages: any[]) => {
-            const alreadyExists = currentMessages.some(
-              (message) => message.id === newMessage.id
-            );
+        markFireChatAsSeen(event.id);
 
-            if (alreadyExists) return currentMessages;
+        setChatMessages((currentMessages: any[]) => {
+          const alreadyExists = currentMessages.some(
+            (message) => message.id === newMessage.id
+          );
 
-            return [...currentMessages, newMessage];
-          });
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "fire_chat_reactions",
-        },
-        () => {
-          loadReactions();
-        }
-      )
-      .subscribe();
+          if (alreadyExists) return currentMessages;
+
+          return [...currentMessages, newMessage];
+        });
+      }
+    );
+
+    channel.subscribe();
 
     return () => {
       supabase.removeChannel(channel);
@@ -184,7 +188,7 @@ export default function FireDetailsScreen() {
         setCountdownText(
           `Fire starts in ${days} day${days === 1 ? "" : "s"}${
             hours > 0 ? `, ${hours} hour${hours === 1 ? "" : "s"}` : ""
-          }`,
+          }`
         );
         return;
       }
@@ -193,7 +197,7 @@ export default function FireDetailsScreen() {
         setCountdownText(
           `Fire starts in ${hours} hour${hours === 1 ? "" : "s"}${
             minutes > 0 ? `, ${minutes} min` : ""
-          }`,
+          }`
         );
         return;
       }
@@ -219,7 +223,7 @@ export default function FireDetailsScreen() {
 
       const forecast = await loadFireWeather(
         event.event_date,
-        event.event_time,
+        event.event_time
       );
 
       setWeather(forecast);
@@ -228,6 +232,11 @@ export default function FireDetailsScreen() {
     loadWeatherForFire();
   }, [event?.event_date, event?.event_time]);
 
+  useEffect(() => {
+    if (isGiphyOpen) {
+      loadTrendingGifs();
+    }
+  }, [isGiphyOpen]);
 
   function showSuccessToast(messageText: string) {
     Toast.show({
@@ -267,6 +276,16 @@ export default function FireDetailsScreen() {
     const last = savedLastName?.trim().toLowerCase() || "unknown";
 
     return `last_seen_chat_${fireId}_${first}_${last}`;
+  }
+
+
+  function getGiphyImageUrl(gif: GiphyResult) {
+    return (
+      gif.images?.fixed_width?.url ||
+      gif.images?.downsized_medium?.url ||
+      gif.images?.original?.url ||
+      ""
+    );
   }
 
   async function loadName() {
@@ -349,46 +368,60 @@ export default function FireDetailsScreen() {
     setChatMessages(data ?? []);
   }
 
-  async function loadReactions() {
-    const { data, error } = await supabase
-      .from("fire_chat_reactions")
-      .select("*");
-
-    if (error) {
-      console.log("Error loading chat reactions:", error.message);
-      return;
+  async function insertChatMessage({
+    message,
+    mediaUrl,
+    mediaType,
+    mediaSource,
+    giphyId,
+  }: {
+    message: string;
+    mediaUrl?: string | null;
+    mediaType?: string | null;
+    mediaSource?: string | null;
+    giphyId?: string | null;
+  }) {
+    if (!event?.id) {
+      showErrorToast("Missing event ID");
+      return false;
     }
 
-    setReactions(data ?? []);
-  }
+    if (!savedFirstName || !savedLastName) {
+      showErrorToast("Missing saved name");
+      return false;
+    }
 
-  async function addReaction(chatId: string, reaction: string) {
-    if (!savedFirstName || !savedLastName) return;
-
-    const { error } = await supabase.from("fire_chat_reactions").upsert(
-      {
-        chat_id: chatId,
-        first_name: savedFirstName,
-        last_name: savedLastName,
-        reaction,
-      },
-      {
-        onConflict: "chat_id,first_name,last_name,reaction",
-      }
-    );
+    const { error } = await supabase.from("fire_chat").insert({
+      event_id: event.id,
+      first_name: savedFirstName,
+      last_name: savedLastName,
+      message,
+      media_url: mediaUrl ?? null,
+      media_type: mediaType ?? null,
+      media_source: mediaSource ?? null,
+      giphy_id: giphyId ?? null,
+    });
 
     if (error) {
       showErrorToast(error.message);
-      return;
+      return false;
     }
 
-    loadReactions();
-  }
+    const fireDate = new Date(
+      `${event.event_date}T00:00:00`
+    ).toLocaleDateString();
 
-  function getReactionCount(chatId: string, reaction: string) {
-    return reactions.filter(
-      (item: any) => item.chat_id === chatId && item.reaction === reaction
-    ).length;
+    await sendFireChatNotification(
+      event.id,
+      `${event.title || "Fire"} - ${fireDate}`,
+      savedFirstName,
+      savedFirstName,
+      savedLastName,
+      message
+    );
+
+    await markFireChatAsSeen(event.id);
+    return true;
   }
 
   async function sendChatMessage() {
@@ -397,50 +430,20 @@ export default function FireDetailsScreen() {
     setIsSendingMessage(true);
 
     try {
-      if (!event?.id) {
-        showErrorToast("Missing event ID");
-        return;
-      }
+      const trimmedMessage = chatInput.trim();
 
-      if (!savedFirstName || !savedLastName) {
-        showErrorToast("Missing saved name");
-        return;
-      }
-
-      if (!chatInput.trim()) {
+      if (!trimmedMessage) {
         showErrorToast("Message is empty");
         return;
       }
 
-      const trimmedMessage = chatInput.trim();
-
-      const { error } = await supabase.from("fire_chat").insert({
-        event_id: event.id,
-        first_name: savedFirstName,
-        last_name: savedLastName,
+      const sent = await insertChatMessage({
         message: trimmedMessage,
       });
 
-      if (error) {
-        showErrorToast(error.message);
-        return;
-      }
-
-      const fireDate = new Date(
-        `${event.event_date}T00:00:00`
-      ).toLocaleDateString();
-
-      await sendFireChatNotification(
-        event.id,
-        `${event.title || "Fire"} - ${fireDate}`,
-        savedFirstName,
-        savedFirstName,
-        savedLastName,
-        trimmedMessage
-      );
+      if (!sent) return;
 
       setChatInput("");
-      await markFireChatAsSeen(event.id);
       showSuccessToast("Message sent 🔥");
     } finally {
       setTimeout(() => {
@@ -449,119 +452,75 @@ export default function FireDetailsScreen() {
     }
   }
 
+
   async function loadTrendingGifs() {
-    setGifLoading(true);
+    if (!GIPHY_API_KEY) {
+      showErrorToast("Missing GIPHY API key.");
+      return;
+    }
+
+    setIsLoadingGiphy(true);
 
     try {
       const response = await fetch(
-        `https://api.giphy.com/v1/gifs/trending?api_key=${GIPHY_API_KEY}&limit=24&rating=pg-13`
+        `https://api.giphy.com/v1/gifs/trending?api_key=${GIPHY_API_KEY}&limit=20&rating=pg-13`
       );
-
       const json = await response.json();
-      setGifResults(json?.data ?? []);
+
+      setGiphyResults(json?.data ?? []);
     } catch (error: any) {
-      showErrorToast("Could not load GIFs");
+      showErrorToast(error?.message || "Could not load GIFs.");
     } finally {
-      setGifLoading(false);
+      setIsLoadingGiphy(false);
     }
   }
 
   async function searchGifs() {
-    const searchTerm = gifSearch.trim();
+    const searchText = giphySearch.trim();
 
-    if (!searchTerm) {
-      await loadTrendingGifs();
+    if (!searchText) {
+      loadTrendingGifs();
       return;
     }
 
-    setGifLoading(true);
+    setIsLoadingGiphy(true);
 
     try {
       const response = await fetch(
         `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(
-          searchTerm
-        )}&limit=24&rating=pg-13`
+          searchText
+        )}&limit=20&rating=pg-13&lang=en`
       );
-
       const json = await response.json();
-      setGifResults(json?.data ?? []);
+
+      setGiphyResults(json?.data ?? []);
     } catch (error: any) {
-      showErrorToast("Could not search GIFs");
+      showErrorToast(error?.message || "Could not search GIFs.");
     } finally {
-      setGifLoading(false);
+      setIsLoadingGiphy(false);
     }
   }
 
-  async function openGifModal() {
-    setGifModalVisible(true);
+  async function sendGiphyGif(gif: GiphyResult) {
+    const gifUrl = getGiphyImageUrl(gif);
 
-    if (gifResults.length === 0) {
-      await loadTrendingGifs();
+    if (!gifUrl) {
+      showErrorToast("Could not use this GIF.");
+      return;
     }
-  }
 
-  async function sendGiphyGif(gif: any) {
-    if (isSendingMessage) return;
+    const sent = await insertChatMessage({
+      message: "Shared a GIF 🔥",
+      mediaUrl: gifUrl,
+      mediaType: "image/gif",
+      mediaSource: "giphy",
+      giphyId: gif.id,
+    });
 
-    setIsSendingMessage(true);
-
-    try {
-      if (!event?.id) {
-        showErrorToast("Missing event ID");
-        return;
-      }
-
-      if (!savedFirstName || !savedLastName) {
-        showErrorToast("Missing saved name");
-        return;
-      }
-
-      const gifUrl =
-        gif?.images?.fixed_height?.url ||
-        gif?.images?.downsized_medium?.url ||
-        gif?.images?.original?.url;
-
-      if (!gifUrl) {
-        showErrorToast("Missing GIF URL");
-        return;
-      }
-
-      const { error } = await supabase.from("fire_chat").insert({
-        event_id: event.id,
-        first_name: savedFirstName,
-        last_name: savedLastName,
-        message: "Sent a GIF",
-        media_url: gifUrl,
-        media_type: "gif",
-        media_source: "giphy",
-        giphy_id: gif.id,
-      });
-
-      if (error) {
-        showErrorToast(error.message);
-        return;
-      }
-
-      const fireDate = new Date(
-        `${event.event_date}T00:00:00`
-      ).toLocaleDateString();
-
-      await sendFireChatNotification(
-        event.id,
-        `${event.title || "Fire"} - ${fireDate}`,
-        savedFirstName,
-        savedFirstName,
-        savedLastName,
-        "Sent a GIF"
-      );
-
-      setGifModalVisible(false);
-      await markFireChatAsSeen(event.id);
+    if (sent) {
+      setIsGiphyOpen(false);
+      setGiphySearch("");
       showSuccessToast("GIF sent 🔥");
-    } finally {
-      setTimeout(() => {
-        setIsSendingMessage(false);
-      }, 700);
     }
   }
 
@@ -685,7 +644,6 @@ export default function FireDetailsScreen() {
         await loadChatMessages();
         await markFireChatAsSeen(event.id);
       }
-
     } finally {
       setRefreshing(false);
     }
@@ -706,33 +664,21 @@ export default function FireDetailsScreen() {
     ));
   }
 
-  function getInitials(first?: string, last?: string) {
-    const firstInitial = first?.trim()?.[0] ?? "";
-    const lastInitial = last?.trim()?.[0] ?? "";
-    const initials = `${firstInitial}${lastInitial}`.toUpperCase();
+  function renderChatMedia(chat: any) {
+    if (!chat.media_url) return null;
 
-    return initials || "?";
-  }
-
-  function getAvatarColor(first?: string, last?: string) {
-    const name = `${first ?? ""}${last ?? ""}`.trim() || "guest";
-    const colors = [
-      "#F97316",
-      "#EF4444",
-      "#22C55E",
-      "#3B82F6",
-      "#A855F7",
-      "#EAB308",
-      "#14B8A6",
-    ];
-
-    let hash = 0;
-
-    for (let i = 0; i < name.length; i++) {
-      hash = name.charCodeAt(i) + ((hash << 5) - hash);
-    }
-
-    return colors[Math.abs(hash) % colors.length];
+    return (
+      <View>
+        <Image
+          source={{ uri: chat.media_url }}
+          style={styles.chatMedia}
+          resizeMode="cover"
+        />
+        {chat.media_source === "giphy" ? (
+          <Text style={styles.giphyLabel}>via GIF</Text>
+        ) : null}
+      </View>
+    );
   }
 
   if (loading) {
@@ -756,191 +702,161 @@ export default function FireDetailsScreen() {
   }
 
   return (
-    <ScrollView
-      contentContainerStyle={styles.screen}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          tintColor="#f97316"
-          colors={["#f97316"]}
-          progressBackgroundColor="#121212"
-        />
-      }
-    >
-      <Pressable style={styles.backButton} onPress={() => router.back()}>
-        <Text style={styles.backButtonText}>← Back</Text>
-      </Pressable>
-
-      <View style={styles.heroCard}>
-        <Text style={styles.label}>FIRE DETAILS</Text>
-        <Text style={styles.title}>{event.title || "Fire"}</Text>
-
-        <Text style={styles.date}>
-          {formatFireDateTime(event.event_date, event.event_time)}
-        </Text>
-
-        {countdownText ? (
-          <Text style={styles.countdownText}>
-            🔥 {countdownText}
-          </Text>
-        ) : null}
-
-        {weather ? (
-          <Text style={styles.weatherText}>
-            {weather.icon || "🌤️"} {Math.round(weather.temperature)}°F •{" "}
-            {weather.rainChance ?? 0}% rain •{" "}
-            {Math.round(weather.windSpeed)} mph wind
-          </Text>
-        ) : null}
-
-        <Text style={styles.message}>
-          {event.message || "No message for this fire."}
-        </Text>
-      </View>
-
-      <View style={styles.summaryRow}>
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryNumber}>{goingList.length}</Text>
-          <Text style={styles.summaryLabel}>Going</Text>
-        </View>
-
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryNumber}>{maybeList.length}</Text>
-          <Text style={styles.summaryLabel}>Maybe</Text>
-        </View>
-
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryNumber}>{notGoingList.length}</Text>
-          <Text style={styles.summaryLabel}>Not Going</Text>
-        </View>
-
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryNumber}>{noResponseList.length}</Text>
-          <Text style={styles.summaryLabel}>No Reply</Text>
-        </View>
-      </View>
-
-      <View style={styles.rsvpListCard}>
-        <Text style={styles.sectionTitle}>Responses</Text>
-        <Text style={styles.sectionHint}>See who has responded to this fire.</Text>
-
-        <Text style={styles.goingHeading}>Going ({goingList.length})</Text>
-        {renderPersonList(goingList, "No responses yet")}
-
-        <Text style={styles.maybeHeading}>Maybe ({maybeList.length})</Text>
-        {renderPersonList(maybeList, "No responses yet")}
-
-        <Text style={styles.notGoingHeading}>
-          Not Going ({notGoingList.length})
-        </Text>
-        {renderPersonList(notGoingList, "No responses yet")}
-
-        <Text style={styles.noResponseHeading}>
-          No Response ({noResponseList.length})
-        </Text>
-        {renderPersonList(noResponseList, "Everyone has responded")}
-      </View>
-
-      <View style={styles.rsvpCard}>
-        <Text style={styles.sectionTitle}>Your RSVP</Text>
-
-        <Pressable
-          onPress={() => handleRSVP("going")}
-          style={[
-            styles.rsvpButton,
-            myRSVP === "going" && styles.rsvpButtonActive,
-          ]}
-        >
-          <Text style={styles.rsvpButtonText}>
-            {myRSVP === "going" ? "You're In 🔥" : "Yes — I’m Coming"}
-          </Text>
+    <>
+      <ScrollView
+        contentContainerStyle={styles.screen}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#f97316"
+            colors={["#f97316"]}
+            progressBackgroundColor="#121212"
+          />
+        }
+      >
+        <Pressable style={styles.backButton} onPress={() => router.back()}>
+          <Text style={styles.backButtonText}>← Back</Text>
         </Pressable>
 
-        <Pressable
-          onPress={() => handleRSVP("maybe")}
-          style={[
-            styles.rsvpButton,
-            myRSVP === "maybe" && styles.rsvpButtonActive,
-          ]}
-        >
-          <Text style={styles.rsvpButtonText}>
-            {myRSVP === "maybe" ? "Marked Maybe" : "Maybe"}
+        <View style={styles.heroCard}>
+          <Text style={styles.label}>FIRE DETAILS</Text>
+          <Text style={styles.title}>{event.title || "Fire"}</Text>
+
+          <Text style={styles.date}>
+            {formatFireDateTime(event.event_date, event.event_time)}
           </Text>
-        </Pressable>
 
-        <Pressable
-          onPress={() => handleRSVP("not_going")}
-          style={[
-            styles.rsvpButton,
-            myRSVP === "not_going" && styles.rsvpButtonActive,
-          ]}
-        >
-          <Text style={styles.rsvpButtonText}>
-            {myRSVP === "not_going"
-              ? "Marked Not Coming"
-              : "No — I’m Not Coming"}
+          {countdownText ? (
+            <Text style={styles.countdownText}>🔥 {countdownText}</Text>
+          ) : null}
+
+          {weather ? (
+            <Text style={styles.weatherText}>
+              {weather.icon || "🌤️"} {Math.round(weather.temperature)}°F •{" "}
+              {weather.rainChance ?? 0}% rain • {Math.round(weather.windSpeed)} mph wind
+            </Text>
+          ) : null}
+
+          <Text style={styles.message}>
+            {event.message || "No message for this fire."}
           </Text>
-        </Pressable>
-      </View>
+        </View>
 
-      <View style={styles.chatCard}>
-        <Text style={styles.sectionTitle}>Fire Chat</Text>
-        <Text style={styles.chatHint}>Messages for this fire only</Text>
+        <View style={styles.summaryRow}>
+          <View style={styles.summaryCard}>
+            <Text style={styles.summaryNumber}>{goingList.length}</Text>
+            <Text style={styles.summaryLabel}>Going</Text>
+          </View>
 
-        <ScrollView
-          ref={chatScrollRef}
-          style={{ maxHeight: 350 }}
-          nestedScrollEnabled={true}
-          keyboardShouldPersistTaps="handled"
-          onContentSizeChange={() => {
-            if (chatMessages.length > 0) {
-              setTimeout(() => {
-                chatScrollRef.current?.scrollToEnd({ animated: true });
-              }, 100);
-            }
-          }}
-        >
-          {chatMessages.length === 0 ? (
-            <View style={styles.emptyStateCard}>
-              <Text style={styles.emptyStateTitle}>No messages yet</Text>
-              <Text style={styles.emptyStateText}>
-                Start the fire chat and get the conversation going 🔥
-              </Text>
-            </View>
-          ) : (
-            chatMessages.map((chat: any) => {
-              const isMyMessage =
-                chat.first_name === savedFirstName &&
-                chat.last_name === savedLastName;
+          <View style={styles.summaryCard}>
+            <Text style={styles.summaryNumber}>{maybeList.length}</Text>
+            <Text style={styles.summaryLabel}>Maybe</Text>
+          </View>
 
-              return (
-                <View
-                  key={chat.id}
-                  style={[
-                    styles.chatRow,
-                    isMyMessage && styles.myChatRow,
-                  ]}
-                >
-                  {!isMyMessage ? (
-                    <View
-                      style={[
-                        styles.avatar,
-                        {
-                          backgroundColor: getAvatarColor(
-                            chat.first_name,
-                            chat.last_name
-                          ),
-                        },
-                      ]}
-                    >
-                      <Text style={styles.avatarText}>
-                        {getInitials(chat.first_name, chat.last_name)}
-                      </Text>
-                    </View>
-                  ) : null}
+          <View style={styles.summaryCard}>
+            <Text style={styles.summaryNumber}>{notGoingList.length}</Text>
+            <Text style={styles.summaryLabel}>Not Going</Text>
+          </View>
 
+          <View style={styles.summaryCard}>
+            <Text style={styles.summaryNumber}>{noResponseList.length}</Text>
+            <Text style={styles.summaryLabel}>No Reply</Text>
+          </View>
+        </View>
+
+        <View style={styles.rsvpListCard}>
+          <Text style={styles.sectionTitle}>Responses</Text>
+          <Text style={styles.sectionHint}>See who has responded to this fire.</Text>
+
+          <Text style={styles.goingHeading}>Going ({goingList.length})</Text>
+          {renderPersonList(goingList, "No responses yet")}
+
+          <Text style={styles.maybeHeading}>Maybe ({maybeList.length})</Text>
+          {renderPersonList(maybeList, "No responses yet")}
+
+          <Text style={styles.notGoingHeading}>Not Going ({notGoingList.length})</Text>
+          {renderPersonList(notGoingList, "No responses yet")}
+
+          <Text style={styles.noResponseHeading}>No Response ({noResponseList.length})</Text>
+          {renderPersonList(noResponseList, "Everyone has responded")}
+        </View>
+
+        <View style={styles.rsvpCard}>
+          <Text style={styles.sectionTitle}>Your RSVP</Text>
+
+          <Pressable
+            onPress={() => handleRSVP("going")}
+            style={[
+              styles.rsvpButton,
+              myRSVP === "going" && styles.rsvpButtonActive,
+            ]}
+          >
+            <Text style={styles.rsvpButtonText}>
+              {myRSVP === "going" ? "You're In 🔥" : "Yes — I’m Coming"}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => handleRSVP("maybe")}
+            style={[
+              styles.rsvpButton,
+              myRSVP === "maybe" && styles.rsvpButtonActive,
+            ]}
+          >
+            <Text style={styles.rsvpButtonText}>
+              {myRSVP === "maybe" ? "Marked Maybe" : "Maybe"}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => handleRSVP("not_going")}
+            style={[
+              styles.rsvpButton,
+              myRSVP === "not_going" && styles.rsvpButtonActive,
+            ]}
+          >
+            <Text style={styles.rsvpButtonText}>
+              {myRSVP === "not_going"
+                ? "Marked Not Coming"
+                : "No — I’m Not Coming"}
+            </Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.chatCard}>
+          <Text style={styles.sectionTitle}>Fire Chat</Text>
+          <Text style={styles.chatHint}>Messages, photos, and GIFs for this fire only</Text>
+
+          <ScrollView
+            ref={chatScrollRef}
+            style={{ maxHeight: 390 }}
+            nestedScrollEnabled={true}
+            keyboardShouldPersistTaps="handled"
+            onContentSizeChange={() => {
+              if (chatMessages.length > 0) {
+                setTimeout(() => {
+                  chatScrollRef.current?.scrollToEnd({ animated: true });
+                }, 100);
+              }
+            }}
+          >
+            {chatMessages.length === 0 ? (
+              <View style={styles.emptyStateCard}>
+                <Text style={styles.emptyStateTitle}>No messages yet</Text>
+                <Text style={styles.emptyStateText}>
+                  Start the fire chat and get the conversation going 🔥
+                </Text>
+              </View>
+            ) : (
+              chatMessages.map((chat: any) => {
+                const isMyMessage =
+                  chat.first_name === savedFirstName &&
+                  chat.last_name === savedLastName;
+
+                return (
                   <View
+                    key={chat.id}
                     style={[
                       styles.chatMessage,
                       isMyMessage && styles.myChatMessage,
@@ -956,131 +872,96 @@ export default function FireDetailsScreen() {
                       </Text>
                     </View>
 
-                    {chat.media_url ? (
-                      <Image
-                        source={{ uri: chat.media_url }}
-                        style={styles.chatGif}
-                        resizeMode="cover"
-                      />
-                    ) : null}
+                    {renderChatMedia(chat)}
 
                     {chat.message ? (
                       <Text style={styles.chatText}>{chat.message}</Text>
                     ) : null}
-
-                    <View style={styles.reactionRow}>
-                      {["🔥", "😂", "👍"].map((emoji) => {
-                        const count = getReactionCount(chat.id, emoji);
-
-                        return (
-                          <Pressable
-                            key={emoji}
-                            style={styles.reactionButton}
-                            onPress={() => addReaction(chat.id, emoji)}
-                          >
-                            <Text style={styles.reactionText}>
-                              {emoji} {count > 0 ? count : ""}
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
                   </View>
-                </View>
-              );
-            })
-          )}
-        </ScrollView>
+                );
+              })
+            )}
+          </ScrollView>
 
-        <TextInput
-          placeholder="Send a message..."
-          placeholderTextColor="#888"
-          value={chatInput}
-          onChangeText={setChatInput}
-          style={styles.chatInput}
-          maxLength={200}
-        />
+          <TextInput
+            placeholder="Send a message..."
+            placeholderTextColor="#888"
+            value={chatInput}
+            onChangeText={setChatInput}
+            style={styles.chatInput}
+            maxLength={200}
+          />
 
-        <Pressable
-          onPress={openGifModal}
-          style={styles.gifButton}
-        >
-          <Text style={styles.gifButtonText}>Search GIFs</Text>
-        </Pressable>
+          <View style={styles.chatActionRow}>
+<Pressable
+              onPress={() => setIsGiphyOpen(true)}
+              style={styles.secondaryButton}
+            >
+              <Text style={styles.secondaryButtonText}>Search Gif's</Text>
+            </Pressable>
+          </View>
 
-        <Pressable
-          onPress={sendChatMessage}
-          disabled={isSendingMessage}
-          style={[
-            styles.primaryButton,
-            isSendingMessage && styles.primaryButtonDisabled,
-          ]}
-        >
-          <Text style={styles.primaryButtonText}>
-            {isSendingMessage ? "Sending..." : "Send Message"}
-          </Text>
-        </Pressable>
-      </View>
+          <Pressable
+            onPress={sendChatMessage}
+            disabled={isSendingMessage}
+            style={[
+              styles.primaryButton,
+              isSendingMessage && styles.primaryButtonDisabled,
+            ]}
+          >
+            <Text style={styles.primaryButtonText}>
+              {isSendingMessage ? "Sending..." : "Send Message"}
+            </Text>
+          </Pressable>
+        </View>
+      </ScrollView>
 
-      <Modal
-        visible={gifModalVisible}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setGifModalVisible(false)}
-      >
+      <Modal visible={isGiphyOpen} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
-          <View style={styles.gifModal}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Choose a GIF</Text>
-
-              <Pressable onPress={() => setGifModalVisible(false)}>
-                <Text style={styles.modalClose}>Close</Text>
+          <View style={styles.giphyModal}>
+            <View style={styles.giphyHeaderRow}>
+              <Text style={styles.giphyTitle}>Search GIF</Text>
+              <Pressable onPress={() => setIsGiphyOpen(false)}>
+                <Text style={styles.closeText}>Close</Text>
               </Pressable>
             </View>
 
-            <View style={styles.gifSearchRow}>
+            <View style={styles.giphySearchRow}>
               <TextInput
-                placeholder="Search GIPHY..."
+                placeholder="Search GIFs..."
                 placeholderTextColor="#888"
-                value={gifSearch}
-                onChangeText={setGifSearch}
-                style={styles.gifSearchInput}
+                value={giphySearch}
+                onChangeText={setGiphySearch}
+                style={styles.giphyInput}
                 returnKeyType="search"
                 onSubmitEditing={searchGifs}
               />
 
-              <Pressable onPress={searchGifs} style={styles.gifSearchButton}>
-                <Text style={styles.gifSearchButtonText}>Search</Text>
+              <Pressable style={styles.giphySearchButton} onPress={searchGifs}>
+                <Text style={styles.giphySearchButtonText}>Search</Text>
               </Pressable>
             </View>
 
-            {gifLoading ? (
-              <View style={styles.gifLoadingWrap}>
-                <ActivityIndicator />
-                <Text style={styles.gifLoadingText}>Loading GIFs...</Text>
+            {isLoadingGiphy ? (
+              <View style={styles.giphyLoading}>
+                <ActivityIndicator color="#f97316" />
+                <Text style={styles.giphyLoadingText}>Loading GIFs...</Text>
               </View>
             ) : (
-              <ScrollView
-                contentContainerStyle={styles.gifGrid}
-                keyboardShouldPersistTaps="handled"
-              >
-                {gifResults.map((gif: any) => {
-                  const gifUrl =
-                    gif?.images?.fixed_width?.url ||
-                    gif?.images?.fixed_height?.url ||
-                    gif?.images?.downsized_medium?.url;
-
+              <ScrollView contentContainerStyle={styles.giphyGrid}>
+                {giphyResults.map((gif) => {
+                  const gifUrl = getGiphyImageUrl(gif);
                   if (!gifUrl) return null;
 
                   return (
                     <Pressable
                       key={gif.id}
+                      style={styles.giphyItem}
                       onPress={() => sendGiphyGif(gif)}
-                      style={styles.gifTile}
                     >
                       <Image
                         source={{ uri: gifUrl }}
-                        style={styles.gifTileImage}
+                        style={styles.giphyImage}
                         resizeMode="cover"
                       />
                     </Pressable>
@@ -1091,7 +972,7 @@ export default function FireDetailsScreen() {
           </View>
         </View>
       </Modal>
-    </ScrollView>
+</>
   );
 }
 
@@ -1116,7 +997,6 @@ const styles = {
     fontSize: 14,
     lineHeight: 20,
   },
-
   screen: {
     flexGrow: 1,
     backgroundColor: "#121212",
@@ -1315,40 +1195,15 @@ const styles = {
     fontSize: 15,
     marginVertical: 12,
   },
-  chatRow: {
-    flexDirection: "row" as const,
-    alignItems: "flex-end" as const,
-    marginBottom: 10,
-  },
-  myChatRow: {
-    justifyContent: "flex-end" as const,
-  },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: "center" as const,
-    justifyContent: "center" as const,
-    marginRight: 8,
-    marginBottom: 4,
-  },
-  avatarText: {
-    color: "#fff",
-    fontWeight: "800" as const,
-    fontSize: 13,
-  },
   chatMessage: {
-    maxWidth: "88%" as const,
-    backgroundColor: "#18181b",
-    borderRadius: 18,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: "#2a2a2a",
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#2a2a2a",
   },
   myChatMessage: {
-    backgroundColor: "#3b2415",
-    borderColor: "#7c2d12",
+    backgroundColor: "#1a1a1a",
+    borderRadius: 14,
+    paddingHorizontal: 10,
   },
   chatHeaderRow: {
     flexDirection: "row" as const,
@@ -1370,6 +1225,22 @@ const styles = {
     fontSize: 16,
     lineHeight: 22,
     paddingLeft: 2,
+    marginTop: 4,
+  },
+  chatMedia: {
+    width: "100%" as const,
+    height: 220,
+    borderRadius: 18,
+    backgroundColor: "#111",
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  giphyLabel: {
+    color: "#777",
+    fontSize: 11,
+    fontWeight: "800" as const,
+    marginBottom: 4,
+    textAlign: "right" as const,
   },
   chatInput: {
     backgroundColor: "#121212",
@@ -1380,6 +1251,11 @@ const styles = {
     borderWidth: 1,
     borderColor: "#333",
     marginTop: 12,
+    marginBottom: 12,
+  },
+  chatActionRow: {
+    flexDirection: "row" as const,
+    gap: 10,
     marginBottom: 12,
   },
   primaryButton: {
@@ -1396,128 +1272,99 @@ const styles = {
   primaryButtonDisabled: {
     opacity: 0.6,
   },
-  gifButton: {
-    backgroundColor: "#27272a",
+  secondaryButton: {
+    flex: 1,
+    backgroundColor: "#2a2a2a",
     borderRadius: 16,
     paddingVertical: 13,
     alignItems: "center" as const,
     borderWidth: 1,
-    borderColor: "#3f3f46",
-    marginBottom: 10,
+    borderColor: "#3a3a3a",
   },
-  gifButtonText: {
-    color: "#facc15",
-    fontSize: 15,
-    fontWeight: "900" as const,
-  },
-  chatGif: {
-    width: 220,
-    height: 160,
-    borderRadius: 14,
-    marginTop: 8,
-    marginBottom: 8,
-    backgroundColor: "#27272a",
-  },
-  reactionRow: {
-    flexDirection: "row" as const,
-    gap: 8,
-    marginTop: 8,
-  },
-  reactionButton: {
-    backgroundColor: "#27272a",
-    borderRadius: 14,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    borderWidth: 1,
-    borderColor: "#3f3f46",
-  },
-  reactionText: {
+  secondaryButtonText: {
     color: "#fff",
-    fontSize: 12,
-    fontWeight: "700" as const,
+    fontSize: 14,
+    fontWeight: "900" as const,
   },
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.75)",
     justifyContent: "flex-end" as const,
   },
-  gifModal: {
-    backgroundColor: "#111",
-    borderTopLeftRadius: 26,
-    borderTopRightRadius: 26,
-    padding: 16,
+  giphyModal: {
+    backgroundColor: "#1f1f1f",
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 18,
     maxHeight: "82%" as const,
     borderWidth: 1,
     borderColor: "#333",
   },
-  modalHeader: {
+  giphyHeaderRow: {
     flexDirection: "row" as const,
     justifyContent: "space-between" as const,
     alignItems: "center" as const,
     marginBottom: 14,
   },
-  modalTitle: {
+  giphyTitle: {
     color: "#fff",
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: "900" as const,
   },
-  modalClose: {
+  closeText: {
     color: "#f97316",
     fontSize: 15,
     fontWeight: "900" as const,
   },
-  gifSearchRow: {
+  giphySearchRow: {
     flexDirection: "row" as const,
     gap: 8,
     marginBottom: 14,
   },
-  gifSearchInput: {
+  giphyInput: {
     flex: 1,
-    backgroundColor: "#1f1f1f",
+    backgroundColor: "#121212",
     color: "#fff",
     borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
+    padding: 12,
+    fontSize: 15,
     borderWidth: 1,
     borderColor: "#333",
-    fontSize: 15,
   },
-  gifSearchButton: {
+  giphySearchButton: {
     backgroundColor: "#f97316",
     borderRadius: 14,
     paddingHorizontal: 14,
     justifyContent: "center" as const,
   },
-  gifSearchButtonText: {
+  giphySearchButtonText: {
     color: "#111",
-    fontSize: 14,
     fontWeight: "900" as const,
   },
-  gifLoadingWrap: {
+  giphyLoading: {
+    padding: 24,
     alignItems: "center" as const,
-    paddingVertical: 30,
   },
-  gifLoadingText: {
+  giphyLoadingText: {
     color: "#aaa",
     marginTop: 10,
-    fontSize: 14,
+    fontWeight: "700" as const,
   },
-  gifGrid: {
+  giphyGrid: {
     flexDirection: "row" as const,
     flexWrap: "wrap" as const,
     gap: 8,
-    paddingBottom: 24,
+    paddingBottom: 18,
   },
-  gifTile: {
-    width: "31%" as const,
-    aspectRatio: 1,
-    borderRadius: 12,
+  giphyItem: {
+    width: "48%" as const,
+    height: 130,
+    borderRadius: 16,
     overflow: "hidden" as const,
-    backgroundColor: "#27272a",
+    backgroundColor: "#111",
   },
-  gifTileImage: {
+  giphyImage: {
     width: "100%" as const,
     height: "100%" as const,
   },
-
 };
