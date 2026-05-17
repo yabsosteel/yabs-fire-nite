@@ -1068,14 +1068,7 @@ export default function HostScreen() {
           <Text style={styles.primaryButtonText}>Create Tomorrow Reminder List</Text>
         </Pressable>
 
-        <Pressable
-          onPress={() => createReminderList("two_hour")}
-          style={styles.primaryButton}
-        >
-          <Text style={styles.primaryButtonText}>Create 2 Hour Reminder List</Text>
-        </Pressable>
-
-        {dedupePeople(reminderRecipients)
+{dedupePeople(reminderRecipients)
           .slice(0, 20)
           .map((person) => (
             <Text key={`${getPersonKey(person)}-${person.reminder_type}`} style={styles.listText}>
