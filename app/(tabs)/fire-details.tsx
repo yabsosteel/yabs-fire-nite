@@ -1,6 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
+  Image,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -11,6 +14,7 @@ import {
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import Toast from "react-native-toast-message";
 import { supabase } from "../../lib/supabase";
+import { GIPHY_API_KEY } from "../../lib/giphy";
 import { loadFireWeather } from "../../lib/weather";
 import {
   sendFireChatNotification,
@@ -31,6 +35,10 @@ export default function FireDetailsScreen() {
   const [countdownText, setCountdownText] = useState("");
   const [weather, setWeather] = useState<any>(null);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [gifModalVisible, setGifModalVisible] = useState(false);
+  const [gifSearch, setGifSearch] = useState("");
+  const [gifResults, setGifResults] = useState<any[]>([]);
+  const [gifLoading, setGifLoading] = useState(false);
   const [savedFirstName, setSavedFirstName] = useState<string | null>(null);
   const [savedLastName, setSavedLastName] = useState<string | null>(null);
   const [approvedGuests, setApprovedGuests] = useState<any[]>([]);
@@ -386,6 +394,122 @@ export default function FireDetailsScreen() {
     }
   }
 
+  async function loadTrendingGifs() {
+    setGifLoading(true);
+
+    try {
+      const response = await fetch(
+        `https://api.giphy.com/v1/gifs/trending?api_key=${GIPHY_API_KEY}&limit=24&rating=pg-13`
+      );
+
+      const json = await response.json();
+      setGifResults(json?.data ?? []);
+    } catch (error: any) {
+      showErrorToast("Could not load GIFs");
+    } finally {
+      setGifLoading(false);
+    }
+  }
+
+  async function searchGifs() {
+    const searchTerm = gifSearch.trim();
+
+    if (!searchTerm) {
+      await loadTrendingGifs();
+      return;
+    }
+
+    setGifLoading(true);
+
+    try {
+      const response = await fetch(
+        `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(
+          searchTerm
+        )}&limit=24&rating=pg-13`
+      );
+
+      const json = await response.json();
+      setGifResults(json?.data ?? []);
+    } catch (error: any) {
+      showErrorToast("Could not search GIFs");
+    } finally {
+      setGifLoading(false);
+    }
+  }
+
+  async function openGifModal() {
+    setGifModalVisible(true);
+
+    if (gifResults.length === 0) {
+      await loadTrendingGifs();
+    }
+  }
+
+  async function sendGiphyGif(gif: any) {
+    if (isSendingMessage) return;
+
+    setIsSendingMessage(true);
+
+    try {
+      if (!event?.id) {
+        showErrorToast("Missing event ID");
+        return;
+      }
+
+      if (!savedFirstName || !savedLastName) {
+        showErrorToast("Missing saved name");
+        return;
+      }
+
+      const gifUrl =
+        gif?.images?.fixed_height?.url ||
+        gif?.images?.downsized_medium?.url ||
+        gif?.images?.original?.url;
+
+      if (!gifUrl) {
+        showErrorToast("Missing GIF URL");
+        return;
+      }
+
+      const { error } = await supabase.from("fire_chat").insert({
+        event_id: event.id,
+        first_name: savedFirstName,
+        last_name: savedLastName,
+        message: "Sent a GIF",
+        media_url: gifUrl,
+        media_type: "gif",
+        media_source: "giphy",
+        giphy_id: gif.id,
+      });
+
+      if (error) {
+        showErrorToast(error.message);
+        return;
+      }
+
+      const fireDate = new Date(
+        `${event.event_date}T00:00:00`
+      ).toLocaleDateString();
+
+      await sendFireChatNotification(
+        event.id,
+        `${event.title || "Fire"} - ${fireDate}`,
+        savedFirstName,
+        savedFirstName,
+        savedLastName,
+        "Sent a GIF"
+      );
+
+      setGifModalVisible(false);
+      await markFireChatAsSeen(event.id);
+      showSuccessToast("GIF sent 🔥");
+    } finally {
+      setTimeout(() => {
+        setIsSendingMessage(false);
+      }, 700);
+    }
+  }
+
   async function handleRSVP(response_status: "going" | "maybe" | "not_going") {
     if (!event?.id) return;
 
@@ -724,7 +848,17 @@ export default function FireDetailsScreen() {
                     </Text>
                   </View>
 
-                  <Text style={styles.chatText}>{chat.message}</Text>
+                  {chat.media_url ? (
+                    <Image
+                      source={{ uri: chat.media_url }}
+                      style={styles.chatGif}
+                      resizeMode="cover"
+                    />
+                  ) : null}
+
+                  {chat.message ? (
+                    <Text style={styles.chatText}>{chat.message}</Text>
+                  ) : null}
                 </View>
               );
             })
@@ -741,6 +875,13 @@ export default function FireDetailsScreen() {
         />
 
         <Pressable
+          onPress={openGifModal}
+          style={styles.gifButton}
+        >
+          <Text style={styles.gifButtonText}>Search GIFs</Text>
+        </Pressable>
+
+        <Pressable
           onPress={sendChatMessage}
           disabled={isSendingMessage}
           style={[
@@ -753,6 +894,76 @@ export default function FireDetailsScreen() {
           </Text>
         </Pressable>
       </View>
+
+      <Modal
+        visible={gifModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setGifModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.gifModal}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Choose a GIF</Text>
+
+              <Pressable onPress={() => setGifModalVisible(false)}>
+                <Text style={styles.modalClose}>Close</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.gifSearchRow}>
+              <TextInput
+                placeholder="Search GIPHY..."
+                placeholderTextColor="#888"
+                value={gifSearch}
+                onChangeText={setGifSearch}
+                style={styles.gifSearchInput}
+                returnKeyType="search"
+                onSubmitEditing={searchGifs}
+              />
+
+              <Pressable onPress={searchGifs} style={styles.gifSearchButton}>
+                <Text style={styles.gifSearchButtonText}>Search</Text>
+              </Pressable>
+            </View>
+
+            {gifLoading ? (
+              <View style={styles.gifLoadingWrap}>
+                <ActivityIndicator />
+                <Text style={styles.gifLoadingText}>Loading GIFs...</Text>
+              </View>
+            ) : (
+              <ScrollView
+                contentContainerStyle={styles.gifGrid}
+                keyboardShouldPersistTaps="handled"
+              >
+                {gifResults.map((gif: any) => {
+                  const gifUrl =
+                    gif?.images?.fixed_width?.url ||
+                    gif?.images?.fixed_height?.url ||
+                    gif?.images?.downsized_medium?.url;
+
+                  if (!gifUrl) return null;
+
+                  return (
+                    <Pressable
+                      key={gif.id}
+                      onPress={() => sendGiphyGif(gif)}
+                      style={styles.gifTile}
+                    >
+                      <Image
+                        source={{ uri: gifUrl }}
+                        style={styles.gifTileImage}
+                        resizeMode="cover"
+                      />
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -1031,4 +1242,110 @@ const styles = {
   primaryButtonDisabled: {
     opacity: 0.6,
   },
+  gifButton: {
+    backgroundColor: "#27272a",
+    borderRadius: 16,
+    paddingVertical: 13,
+    alignItems: "center" as const,
+    borderWidth: 1,
+    borderColor: "#3f3f46",
+    marginBottom: 10,
+  },
+  gifButtonText: {
+    color: "#facc15",
+    fontSize: 15,
+    fontWeight: "900" as const,
+  },
+  chatGif: {
+    width: 220,
+    height: 160,
+    borderRadius: 14,
+    marginTop: 8,
+    marginBottom: 8,
+    backgroundColor: "#27272a",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.75)",
+    justifyContent: "flex-end" as const,
+  },
+  gifModal: {
+    backgroundColor: "#111",
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    padding: 16,
+    maxHeight: "82%" as const,
+    borderWidth: 1,
+    borderColor: "#333",
+  },
+  modalHeader: {
+    flexDirection: "row" as const,
+    justifyContent: "space-between" as const,
+    alignItems: "center" as const,
+    marginBottom: 14,
+  },
+  modalTitle: {
+    color: "#fff",
+    fontSize: 20,
+    fontWeight: "900" as const,
+  },
+  modalClose: {
+    color: "#f97316",
+    fontSize: 15,
+    fontWeight: "900" as const,
+  },
+  gifSearchRow: {
+    flexDirection: "row" as const,
+    gap: 8,
+    marginBottom: 14,
+  },
+  gifSearchInput: {
+    flex: 1,
+    backgroundColor: "#1f1f1f",
+    color: "#fff",
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: "#333",
+    fontSize: 15,
+  },
+  gifSearchButton: {
+    backgroundColor: "#f97316",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    justifyContent: "center" as const,
+  },
+  gifSearchButtonText: {
+    color: "#111",
+    fontSize: 14,
+    fontWeight: "900" as const,
+  },
+  gifLoadingWrap: {
+    alignItems: "center" as const,
+    paddingVertical: 30,
+  },
+  gifLoadingText: {
+    color: "#aaa",
+    marginTop: 10,
+    fontSize: 14,
+  },
+  gifGrid: {
+    flexDirection: "row" as const,
+    flexWrap: "wrap" as const,
+    gap: 8,
+    paddingBottom: 24,
+  },
+  gifTile: {
+    width: "31%" as const,
+    aspectRatio: 1,
+    borderRadius: 12,
+    overflow: "hidden" as const,
+    backgroundColor: "#27272a",
+  },
+  gifTileImage: {
+    width: "100%" as const,
+    height: "100%" as const,
+  },
+
 };
