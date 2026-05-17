@@ -651,6 +651,35 @@ export default function FireDetailsScreen() {
     ));
   }
 
+  function getInitials(first?: string, last?: string) {
+    const firstInitial = first?.trim()?.[0] ?? "";
+    const lastInitial = last?.trim()?.[0] ?? "";
+    const initials = `${firstInitial}${lastInitial}`.toUpperCase();
+
+    return initials || "?";
+  }
+
+  function getAvatarColor(first?: string, last?: string) {
+    const name = `${first ?? ""}${last ?? ""}`.trim() || "guest";
+    const colors = [
+      "#F97316",
+      "#EF4444",
+      "#22C55E",
+      "#3B82F6",
+      "#A855F7",
+      "#EAB308",
+      "#14B8A6",
+    ];
+
+    let hash = 0;
+
+    for (let i = 0; i < name.length; i++) {
+      hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    }
+
+    return colors[Math.abs(hash) % colors.length];
+  }
+
   if (loading) {
     return (
       <View style={styles.centerScreen}>
@@ -834,31 +863,56 @@ export default function FireDetailsScreen() {
                 <View
                   key={chat.id}
                   style={[
-                    styles.chatMessage,
-                    isMyMessage && styles.myChatMessage,
+                    styles.chatRow,
+                    isMyMessage && styles.myChatRow,
                   ]}
                 >
-                  <View style={styles.chatHeaderRow}>
-                    <Text style={styles.chatName}>
-                      {chat.first_name} {chat.last_name}
-                    </Text>
+                  {!isMyMessage ? (
+                    <View
+                      style={[
+                        styles.avatar,
+                        {
+                          backgroundColor: getAvatarColor(
+                            chat.first_name,
+                            chat.last_name
+                          ),
+                        },
+                      ]}
+                    >
+                      <Text style={styles.avatarText}>
+                        {getInitials(chat.first_name, chat.last_name)}
+                      </Text>
+                    </View>
+                  ) : null}
 
-                    <Text style={styles.chatTime}>
-                      {formatChatTime(chat.created_at)}
-                    </Text>
+                  <View
+                    style={[
+                      styles.chatMessage,
+                      isMyMessage && styles.myChatMessage,
+                    ]}
+                  >
+                    <View style={styles.chatHeaderRow}>
+                      <Text style={styles.chatName}>
+                        {chat.first_name} {chat.last_name}
+                      </Text>
+
+                      <Text style={styles.chatTime}>
+                        {formatChatTime(chat.created_at)}
+                      </Text>
+                    </View>
+
+                    {chat.media_url ? (
+                      <Image
+                        source={{ uri: chat.media_url }}
+                        style={styles.chatGif}
+                        resizeMode="cover"
+                      />
+                    ) : null}
+
+                    {chat.message ? (
+                      <Text style={styles.chatText}>{chat.message}</Text>
+                    ) : null}
                   </View>
-
-                  {chat.media_url ? (
-                    <Image
-                      source={{ uri: chat.media_url }}
-                      style={styles.chatGif}
-                      resizeMode="cover"
-                    />
-                  ) : null}
-
-                  {chat.message ? (
-                    <Text style={styles.chatText}>{chat.message}</Text>
-                  ) : null}
                 </View>
               );
             })
@@ -1188,13 +1242,40 @@ const styles = {
     fontSize: 15,
     marginVertical: 12,
   },
+  chatRow: {
+    flexDirection: "row" as const,
+    alignItems: "flex-end" as const,
+    marginBottom: 10,
+  },
+  myChatRow: {
+    justifyContent: "flex-end" as const,
+  },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    marginRight: 8,
+    marginBottom: 4,
+  },
+  avatarText: {
+    color: "#fff",
+    fontWeight: "800" as const,
+    fontSize: 13,
+  },
   chatMessage: {
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#2a2a2a",
+    maxWidth: "88%" as const,
+    backgroundColor: "#18181b",
+    borderRadius: 18,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: "#2a2a2a",
   },
   myChatMessage: {
-    backgroundColor: "#1a1a1a",
+    backgroundColor: "#3b2415",
+    borderColor: "#7c2d12",
   },
   chatHeaderRow: {
     flexDirection: "row" as const,
