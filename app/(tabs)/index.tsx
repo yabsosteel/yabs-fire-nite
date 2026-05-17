@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { supabase } from "../../lib/supabase";
 import { registerForPushNotificationsAsync } from "../../lib/notifications";
+import { loadFireWeather } from "../../lib/weather";
 import Animated, { FadeInUp } from "react-native-reanimated";
 
 export default function HomeScreen() {
@@ -26,6 +27,8 @@ export default function HomeScreen() {
   const [announcements, setAnnouncements] = useState<any[]>([]);
   const [status, setStatus] = useState("Loading event...");
   const [message, setMessage] = useState("");
+  const [countdownText, setCountdownText] = useState("");
+  const [weather, setWeather] = useState<any>(null);
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -34,7 +37,6 @@ export default function HomeScreen() {
 
   const [isApproved, setIsApproved] = useState(false);
   const [approvalChecked, setApprovalChecked] = useState(false);
-
 
   const [approvedGuests, setApprovedGuests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -81,7 +83,6 @@ export default function HomeScreen() {
     }),
   );
 
-
   useEffect(() => {
     loadEvent();
     loadAnnouncements();
@@ -116,6 +117,73 @@ export default function HomeScreen() {
   useEffect(() => {
     eventIdRef.current = event?.id ? String(event.id) : null;
   }, [event?.id]);
+
+  useEffect(() => {
+    function updateCountdown() {
+      if (!event?.event_date || !event?.event_time) {
+        setCountdownText("");
+        return;
+      }
+
+      const fireDateTime = new Date(`${event.event_date}T${event.event_time}`);
+      const now = new Date();
+      const differenceMs = fireDateTime.getTime() - now.getTime();
+
+      if (differenceMs <= 0) {
+        setCountdownText("Fire is starting now 🔥");
+        return;
+      }
+
+      const totalMinutes = Math.floor(differenceMs / 60000);
+      const days = Math.floor(totalMinutes / 1440);
+      const hours = Math.floor((totalMinutes % 1440) / 60);
+      const minutes = totalMinutes % 60;
+
+      if (days > 0) {
+        setCountdownText(
+          `Fire starts in ${days} day${days === 1 ? "" : "s"}${
+            hours > 0 ? `, ${hours} hour${hours === 1 ? "" : "s"}` : ""
+          }`,
+        );
+        return;
+      }
+
+      if (hours > 0) {
+        setCountdownText(
+          `Fire starts in ${hours} hour${hours === 1 ? "" : "s"}${
+            minutes > 0 ? `, ${minutes} min` : ""
+          }`,
+        );
+        return;
+      }
+
+      setCountdownText(`Fire starts in ${minutes} min`);
+    }
+
+    updateCountdown();
+
+    const interval = setInterval(updateCountdown, 60000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [event?.event_date, event?.event_time]);
+
+  useEffect(() => {
+    async function loadWeatherForFire() {
+      if (!event?.event_date || !event?.event_time) {
+        setWeather(null);
+        return;
+      }
+
+      const forecast = await loadFireWeather(event.event_date, event.event_time);
+      setWeather(forecast);
+    }
+
+    loadWeatherForFire();
+  }, [event?.event_date, event?.event_time]);
+
+
 
   useEffect(() => {
     const channel = supabase
@@ -192,7 +260,6 @@ export default function HomeScreen() {
     };
   }, []);
 
-
   useEffect(() => {
     const rsvpChannel = supabase
       .channel("fire-rsvp-home")
@@ -206,7 +273,7 @@ export default function HomeScreen() {
         () => {
           console.log("RSVP change detected — refreshing home screen");
           loadEvent();
-        }
+        },
       )
       .subscribe();
 
@@ -222,7 +289,7 @@ export default function HomeScreen() {
         if (nextAppState === "active") {
           loadEvent();
         }
-      }
+      },
     );
 
     return () => {
@@ -261,7 +328,6 @@ export default function HomeScreen() {
       responseSubscription.remove();
     };
   }, [router]);
-
 
   useEffect(() => {
     if (!event?.id || !savedFirstName || !savedLastName) return;
@@ -526,7 +592,6 @@ export default function HomeScreen() {
     return `${formatDisplayDate(dateString)} at ${time}`;
   }
 
-
   async function loadAnnouncements() {
     const { data, error } = await supabase
       .from("announcements")
@@ -641,7 +706,6 @@ export default function HomeScreen() {
     setApprovalChecked(true);
   }
 
-
   async function loadApprovedGuests() {
     const { data, error } = await supabase
       .from("approved_users")
@@ -689,12 +753,12 @@ export default function HomeScreen() {
       contentContainerStyle={styles.screen}
       refreshControl={
         <RefreshControl
-  refreshing={refreshing}
-  onRefresh={onRefresh}
-  tintColor="#f97316"
-  colors={["#f97316"]}
-  progressBackgroundColor="#121212"
-/>
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor="#f97316"
+          colors={["#f97316"]}
+          progressBackgroundColor="#121212"
+        />
       }
     >
       <View style={styles.header}>
@@ -708,7 +772,10 @@ export default function HomeScreen() {
         </Text>
       </View>
 
-      <Pressable disabled={!event || showHomeLoadingCard} onPress={openFireDetails}>
+      <Pressable
+        disabled={!event || showHomeLoadingCard}
+        onPress={openFireDetails}
+      >
         <Animated.View
           entering={FadeInUp.duration(500)}
           style={styles.heroCard}
@@ -732,11 +799,19 @@ export default function HomeScreen() {
           ) : (
             <>
               <Text style={styles.heroLabel}>
-                {event ? "NEXT FIRE" : latestAnnouncement ? "ANNOUNCEMENT" : "STATUS"}
+                {event
+                  ? "NEXT FIRE"
+                  : latestAnnouncement
+                    ? "ANNOUNCEMENT"
+                    : "STATUS"}
               </Text>
 
               <Text style={styles.heroTitle}>
-                {event ? status : latestAnnouncement ? "Fire Announcement" : status}
+                {event
+                  ? status
+                  : latestAnnouncement
+                    ? "Fire Announcement"
+                    : status}
               </Text>
 
               {event && (
@@ -744,6 +819,18 @@ export default function HomeScreen() {
                   {formatFireDateTime(event.event_date, event.event_time)}
                 </Text>
               )}
+
+              {event && countdownText ? (
+                <Text style={styles.countdownText}>
+                  🔥 {countdownText}
+                </Text>
+              ) : null}
+
+              {event && weather ? (
+                <Text style={styles.weatherText}>
+                  {weather.icon || "🌤️"} {Math.round(weather.temperature)}°F • {weather.rainChance ?? 0}% rain • {Math.round(weather.windSpeed)} mph wind
+                </Text>
+              ) : null}
 
               <Text style={styles.heroMessage}>
                 {event
@@ -806,7 +893,8 @@ export default function HomeScreen() {
               key={item.id || index}
               style={[
                 styles.announcementItem,
-                index === announcements.length - 1 && styles.lastAnnouncementItem,
+                index === announcements.length - 1 &&
+                  styles.lastAnnouncementItem,
               ]}
             >
               <Text style={styles.announcementMessage}>{item.message}</Text>
@@ -820,7 +908,6 @@ export default function HomeScreen() {
           ))}
         </View>
       ) : null}
-
 
       {upcomingFires.length > 1 && (
         <View style={styles.upcomingCard}>
@@ -913,7 +1000,6 @@ const styles = StyleSheet.create({
     paddingBottom: 0,
     marginBottom: 0,
   },
-
   announcementCard: {
     width: "100%",
     backgroundColor: "#24170f",
@@ -1041,6 +1127,19 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "900",
     lineHeight: 36,
+  },
+  countdownText: {
+    color: "#f97316",
+    fontSize: 14,
+    fontWeight: "800" as const,
+    marginTop: 10,
+    marginBottom: 12,
+  },
+  weatherText: {
+    color: "#b3b3ba",
+    fontSize: 14,
+    fontWeight: "800",
+    marginBottom: 12,
   },
   heroMessage: {
     color: "#ddd",

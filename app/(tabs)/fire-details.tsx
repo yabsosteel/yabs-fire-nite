@@ -9,7 +9,9 @@ import {
   View,
 } from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import Toast from "react-native-toast-message";
 import { supabase } from "../../lib/supabase";
+import { loadFireWeather } from "../../lib/weather";
 import {
   sendFireChatNotification,
   sendPushNotificationToHosts,
@@ -26,6 +28,8 @@ export default function FireDetailsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [chatInput, setChatInput] = useState("");
+  const [countdownText, setCountdownText] = useState("");
+  const [weather, setWeather] = useState<any>(null);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [savedFirstName, setSavedFirstName] = useState<string | null>(null);
   const [savedLastName, setSavedLastName] = useState<string | null>(null);
@@ -134,6 +138,94 @@ export default function FireDetailsScreen() {
     };
   }, [event?.id, savedFirstName, savedLastName]);
 
+  useEffect(() => {
+    function updateCountdown() {
+      if (!event?.event_date || !event?.event_time) {
+        setCountdownText("");
+        return;
+      }
+
+      const fireDateTime = new Date(`${event.event_date}T${event.event_time}`);
+      const now = new Date();
+      const differenceMs = fireDateTime.getTime() - now.getTime();
+
+      if (differenceMs <= 0) {
+        setCountdownText("Fire is starting now 🔥");
+        return;
+      }
+
+      const totalMinutes = Math.floor(differenceMs / 60000);
+      const days = Math.floor(totalMinutes / 1440);
+      const hours = Math.floor((totalMinutes % 1440) / 60);
+      const minutes = totalMinutes % 60;
+
+      if (days > 0) {
+        setCountdownText(
+          `Fire starts in ${days} day${days === 1 ? "" : "s"}${
+            hours > 0 ? `, ${hours} hour${hours === 1 ? "" : "s"}` : ""
+          }`,
+        );
+        return;
+      }
+
+      if (hours > 0) {
+        setCountdownText(
+          `Fire starts in ${hours} hour${hours === 1 ? "" : "s"}${
+            minutes > 0 ? `, ${minutes} min` : ""
+          }`,
+        );
+        return;
+      }
+
+      setCountdownText(`Fire starts in ${minutes} min`);
+    }
+
+    updateCountdown();
+
+    const interval = setInterval(updateCountdown, 60000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [event?.event_date, event?.event_time]);
+
+  useEffect(() => {
+    async function loadWeatherForFire() {
+      if (!event?.event_date || !event?.event_time) {
+        setWeather(null);
+        return;
+      }
+
+      const forecast = await loadFireWeather(
+        event.event_date,
+        event.event_time,
+      );
+
+      setWeather(forecast);
+    }
+
+    loadWeatherForFire();
+  }, [event?.event_date, event?.event_time]);
+
+
+  function showSuccessToast(messageText: string) {
+    Toast.show({
+      type: "success",
+      text1: messageText,
+      position: "top",
+      visibilityTime: 2200,
+    });
+  }
+
+  function showErrorToast(messageText: string) {
+    Toast.show({
+      type: "error",
+      text1: messageText,
+      position: "top",
+      visibilityTime: 3200,
+    });
+  }
+
   function dedupePeople(people: any[]) {
     const seen = new Set();
 
@@ -210,7 +302,7 @@ export default function FireDetailsScreen() {
       .maybeSingle();
 
     if (error) {
-      alert(error.message);
+      showErrorToast(error.message);
       setLoading(false);
       return;
     }
@@ -229,7 +321,7 @@ export default function FireDetailsScreen() {
       .order("created_at", { ascending: true });
 
     if (error) {
-      alert(error.message);
+      showErrorToast(error.message);
       return;
     }
 
@@ -243,17 +335,17 @@ export default function FireDetailsScreen() {
 
     try {
       if (!event?.id) {
-        alert("Missing event ID");
+        showErrorToast("Missing event ID");
         return;
       }
 
       if (!savedFirstName || !savedLastName) {
-        alert("Missing saved name");
+        showErrorToast("Missing saved name");
         return;
       }
 
       if (!chatInput.trim()) {
-        alert("Message is empty");
+        showErrorToast("Message is empty");
         return;
       }
 
@@ -267,7 +359,7 @@ export default function FireDetailsScreen() {
       });
 
       if (error) {
-        alert(error.message);
+        showErrorToast(error.message);
         return;
       }
 
@@ -286,6 +378,7 @@ export default function FireDetailsScreen() {
 
       setChatInput("");
       await markFireChatAsSeen(event.id);
+      showSuccessToast("Message sent 🔥");
     } finally {
       setTimeout(() => {
         setIsSendingMessage(false);
@@ -302,8 +395,8 @@ export default function FireDetailsScreen() {
     console.log("Current RSVP user:", currentFirstName, currentLastName);
 
     if (!currentFirstName || !currentLastName) {
-      alert(
-        "Missing saved name. Please return to the home screen and save your name again."
+      showErrorToast(
+        "Missing saved name. Please return home and save your name again."
       );
       return;
     }
@@ -323,7 +416,7 @@ export default function FireDetailsScreen() {
     );
 
     if (error) {
-      alert(error.message);
+      showErrorToast(error.message);
       return;
     }
 
@@ -355,6 +448,7 @@ export default function FireDetailsScreen() {
     setMyRSVP(response_status);
     loadFireDetails();
     loadApprovedGuests();
+    showSuccessToast(`RSVP updated: ${responseText} 🔥`);
   }
 
   function formatFireNotificationDateTime(date?: string, time?: string) {
@@ -412,6 +506,7 @@ export default function FireDetailsScreen() {
         await loadChatMessages();
         await markFireChatAsSeen(event.id);
       }
+
     } finally {
       setRefreshing(false);
     }
@@ -457,12 +552,12 @@ export default function FireDetailsScreen() {
       contentContainerStyle={styles.screen}
       refreshControl={
         <RefreshControl
-  refreshing={refreshing}
-  onRefresh={onRefresh}
-  tintColor="#f97316"
-  colors={["#f97316"]}
-  progressBackgroundColor="#121212"
-/>
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor="#f97316"
+          colors={["#f97316"]}
+          progressBackgroundColor="#121212"
+        />
       }
     >
       <Pressable style={styles.backButton} onPress={() => router.back()}>
@@ -476,6 +571,20 @@ export default function FireDetailsScreen() {
         <Text style={styles.date}>
           {formatFireDateTime(event.event_date, event.event_time)}
         </Text>
+
+        {countdownText ? (
+          <Text style={styles.countdownText}>
+            🔥 {countdownText}
+          </Text>
+        ) : null}
+
+        {weather ? (
+          <Text style={styles.weatherText}>
+            {weather.icon || "🌤️"} {Math.round(weather.temperature)}°F •{" "}
+            {weather.rainChance ?? 0}% rain •{" "}
+            {Math.round(weather.windSpeed)} mph wind
+          </Text>
+        ) : null}
 
         <Text style={styles.message}>
           {event.message || "No message for this fire."}
@@ -585,7 +694,12 @@ export default function FireDetailsScreen() {
           }}
         >
           {chatMessages.length === 0 ? (
-            <Text style={styles.emptyText}>No messages yet. Start the chat.</Text>
+            <View style={styles.emptyStateCard}>
+              <Text style={styles.emptyStateTitle}>No messages yet</Text>
+              <Text style={styles.emptyStateText}>
+                Start the fire chat and get the conversation going 🔥
+              </Text>
+            </View>
           ) : (
             chatMessages.map((chat: any) => {
               const isMyMessage =
@@ -644,6 +758,27 @@ export default function FireDetailsScreen() {
 }
 
 const styles = {
+  emptyStateCard: {
+    backgroundColor: "#18181b",
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#2f2f35",
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  emptyStateTitle: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "900" as const,
+    marginBottom: 6,
+  },
+  emptyStateText: {
+    color: "#b3b3ba",
+    fontSize: 14,
+    lineHeight: 20,
+  },
+
   screen: {
     flexGrow: 1,
     backgroundColor: "#121212",
@@ -742,6 +877,19 @@ const styles = {
     fontSize: 17,
     fontWeight: "700" as const,
     marginBottom: 16,
+  },
+  countdownText: {
+    color: "#f97316",
+    fontSize: 14,
+    fontWeight: "800" as const,
+    marginTop: 10,
+    marginBottom: 12,
+  },
+  weatherText: {
+    color: "#b3b3ba",
+    fontSize: 14,
+    fontWeight: "800" as const,
+    marginBottom: 14,
   },
   message: {
     color: "#ddd",
