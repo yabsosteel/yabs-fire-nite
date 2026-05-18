@@ -46,6 +46,8 @@ export default function HomeScreen() {
   const [latestChatCreatedAt, setLatestChatCreatedAt] = useState<string | null>(
     null,
   );
+  const [latestChatSender, setLatestChatSender] = useState<string | null>(null);
+  const [latestChatPreview, setLatestChatPreview] = useState<string | null>(null);
 
   const isHost =
     savedFirstName?.toLowerCase() === "rian" &&
@@ -409,7 +411,7 @@ export default function HomeScreen() {
 
     const { data, error } = await supabase
       .from("fire_chat")
-      .select("created_at, first_name, last_name")
+      .select("created_at, first_name, last_name, message, media_source, media_url")
       .eq("event_id", fireEventId)
       .order("created_at", { ascending: false });
 
@@ -422,6 +424,8 @@ export default function HomeScreen() {
 
     if (!data || data.length === 0) {
       setLatestChatCreatedAt(null);
+      setLatestChatSender(null);
+      setLatestChatPreview(null);
       setHasUnreadChat(false);
       setUnreadChatCount(0);
       return;
@@ -429,6 +433,10 @@ export default function HomeScreen() {
 
     const newestMessage = data[0];
     setLatestChatCreatedAt(newestMessage.created_at);
+    setLatestChatSender(
+      `${newestMessage.first_name || "Someone"}`.trim() || "Someone",
+    );
+    setLatestChatPreview(getLatestChatPreview(newestMessage));
 
     const lastSeen = await AsyncStorage.getItem(getChatSeenKey(fireEventId));
 
@@ -619,6 +627,38 @@ export default function HomeScreen() {
     }
 
     return `${formatDisplayDate(dateString)} at ${time}`;
+  }
+
+
+  function formatLatestChatTime(dateString?: string | null) {
+    if (!dateString) return "";
+
+    const messageDate = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - messageDate.getTime();
+    const diffMinutes = Math.floor(diffMs / 60000);
+
+    if (diffMinutes < 1) return "now";
+    if (diffMinutes < 60) return `${diffMinutes}m ago`;
+
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+
+    return messageDate.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+    });
+  }
+
+  function getLatestChatPreview(message: any) {
+    const text = (message?.message || "").trim();
+
+    if (text) return text.length > 54 ? `${text.slice(0, 54)}...` : text;
+
+    if (message?.media_source === "giphy") return "Shared a GIF 🔥";
+    if (message?.media_url) return "Shared a photo";
+
+    return "New chat activity";
   }
 
   async function loadAnnouncements() {
@@ -905,6 +945,19 @@ export default function HomeScreen() {
                           ? "1 new message"
                           : `${unreadChatCount} New Messages`}
                       </Text>
+
+                      {latestChatPreview ? (
+                        <Text style={styles.unreadChatPreview} numberOfLines={1}>
+                          {latestChatSender ? `${latestChatSender}: ` : ""}
+                          {latestChatPreview}
+                        </Text>
+                      ) : null}
+
+                      {latestChatCreatedAt ? (
+                        <Text style={styles.unreadChatTime}>
+                          {formatLatestChatTime(latestChatCreatedAt)}
+                        </Text>
+                      ) : null}
                     </View>
                   )}
 
@@ -1193,10 +1246,11 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     marginTop: 14,
     backgroundColor: "#ef4444",
-    paddingVertical: 7,
-    paddingHorizontal: 30,
-    borderRadius: 999,
+    paddingVertical: 9,
+    paddingHorizontal: 22,
+    borderRadius: 18,
     alignItems: "center",
+    maxWidth: "92%",
   },
   unreadChatPillTitle: {
     color: "#fff",
@@ -1209,6 +1263,21 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 13,
     fontWeight: "900",
+    textAlign: "center",
+    marginTop: 2,
+  },
+  unreadChatPreview: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "800",
+    textAlign: "center",
+    marginTop: 4,
+    maxWidth: 260,
+  },
+  unreadChatTime: {
+    color: "#fee2e2",
+    fontSize: 11,
+    fontWeight: "800",
     textAlign: "center",
     marginTop: 2,
   },

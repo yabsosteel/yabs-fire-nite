@@ -646,10 +646,43 @@ export default function FireDetailsScreen() {
   function formatChatTime(dateString?: string) {
     if (!dateString) return "";
 
-    return new Date(dateString).toLocaleTimeString([], {
+    const messageDate = new Date(dateString);
+    const today = new Date();
+    const isToday = messageDate.toDateString() === today.toDateString();
+
+    const timeText = messageDate.toLocaleTimeString([], {
       hour: "numeric",
       minute: "2-digit",
     });
+
+    if (isToday) return timeText;
+
+    const dateText = messageDate.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+    });
+
+    return `${dateText} • ${timeText}`;
+  }
+
+  function isSameChatSender(firstMessage: any, secondMessage: any) {
+    if (!firstMessage || !secondMessage) return false;
+
+    return (
+      (firstMessage.first_name || "").trim().toLowerCase() ===
+        (secondMessage.first_name || "").trim().toLowerCase() &&
+      (firstMessage.last_name || "").trim().toLowerCase() ===
+        (secondMessage.last_name || "").trim().toLowerCase()
+    );
+  }
+
+  function areMessagesCloseTogether(firstMessage: any, secondMessage: any) {
+    if (!firstMessage?.created_at || !secondMessage?.created_at) return false;
+
+    const firstTime = new Date(firstMessage.created_at).getTime();
+    const secondTime = new Date(secondMessage.created_at).getTime();
+
+    return Math.abs(secondTime - firstTime) <= 5 * 60 * 1000;
   }
 
   async function onRefresh() {
@@ -721,7 +754,13 @@ export default function FireDetailsScreen() {
   }
 
   return (
-    <>
+    <View style={styles.page}>
+      <View style={styles.fixedHeader}>
+        <Pressable style={styles.backButton} onPress={() => router.back()}>
+          <Text style={styles.backButtonText}>← Back</Text>
+        </Pressable>
+      </View>
+
       <ScrollView
         contentContainerStyle={styles.screen}
         refreshControl={
@@ -734,10 +773,6 @@ export default function FireDetailsScreen() {
           />
         }
       >
-        <Pressable style={styles.backButton} onPress={() => router.back()}>
-          <Text style={styles.backButtonText}>← Back</Text>
-        </Pressable>
-
         <View style={styles.heroCard}>
           <Text style={styles.label}>FIRE DETAILS</Text>
           <Text style={styles.title}>{event.title || "Fire"}</Text>
@@ -869,17 +904,44 @@ export default function FireDetailsScreen() {
               </View>
             ) : (
               chatMessages.map((chat: any, index: number) => {
+                const previousChat = index > 0 ? chatMessages[index - 1] : null;
+                const nextChat =
+                  index < chatMessages.length - 1 ? chatMessages[index + 1] : null;
+
                 const isMyMessage =
                   chat.first_name === savedFirstName &&
                   chat.last_name === savedLastName;
 
+                const isGroupedWithPrevious =
+                  isSameChatSender(previousChat, chat) &&
+                  areMessagesCloseTogether(previousChat, chat);
+
+                const isGroupedWithNext =
+                  isSameChatSender(chat, nextChat) &&
+                  areMessagesCloseTogether(chat, nextChat);
+
+                const shouldShowHeader = true;
+
+                const hasEarlierUnreadMessageFromSomeoneElse =
+                  !!lastSeenChatAt &&
+                  chatMessages.slice(0, index).some((message: any) => {
+                    const messageIsMine =
+                      message.first_name === savedFirstName &&
+                      message.last_name === savedLastName;
+
+                    return (
+                      !messageIsMine &&
+                      new Date(message.created_at).getTime() >
+                        new Date(lastSeenChatAt).getTime()
+                    );
+                  });
+
                 const shouldShowUnreadSeparator =
                   !!lastSeenChatAt &&
+                  !isMyMessage &&
                   new Date(chat.created_at).getTime() >
                     new Date(lastSeenChatAt).getTime() &&
-                  (index === 0 ||
-                    new Date(chatMessages[index - 1].created_at).getTime() <=
-                      new Date(lastSeenChatAt).getTime());
+                  !hasEarlierUnreadMessageFromSomeoneElse;
 
                 return (
                   <View key={chat.id}>
@@ -897,22 +959,32 @@ export default function FireDetailsScreen() {
                       style={[
                         styles.chatMessage,
                         isMyMessage && styles.myChatMessage,
+                        isGroupedWithPrevious && styles.groupedChatMessage,
+                        isGroupedWithNext && styles.chatMessageGroupedWithNext,
                       ]}
                     >
-                      <View style={styles.chatHeaderRow}>
-                        <Text style={styles.chatName}>
-                          {chat.first_name} {chat.last_name}
-                        </Text>
+                      {shouldShowHeader ? (
+                        <View style={styles.chatHeaderRow}>
+                          <Text style={styles.chatName}>
+                            {chat.first_name} {chat.last_name}
+                          </Text>
 
-                        <Text style={styles.chatTime}>
-                          {formatChatTime(chat.created_at)}
-                        </Text>
-                      </View>
+                          <Text style={styles.chatTime}>
+                            {formatChatTime(chat.created_at)}
+                          </Text>
+                        </View>
+                      ) : null}
 
                       {renderChatMedia(chat)}
 
                       {chat.message ? (
-                        <Text style={styles.chatText}>{chat.message}</Text>
+                        <Text
+                          style={[
+                            styles.chatText,
+                          ]}
+                        >
+                          {chat.message}
+                        </Text>
                       ) : null}
                     </View>
                   </View>
@@ -1010,7 +1082,7 @@ export default function FireDetailsScreen() {
           </View>
         </View>
       </Modal>
-</>
+    </View>
   );
 }
 
@@ -1035,6 +1107,19 @@ const styles = {
     fontSize: 14,
     lineHeight: 20,
   },
+  page: {
+    flex: 1,
+    backgroundColor: "#121212",
+  },
+  fixedHeader: {
+    backgroundColor: "#121212",
+    paddingTop: 18,
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#242424",
+    zIndex: 10,
+  },
   screen: {
     flexGrow: 1,
     backgroundColor: "#121212",
@@ -1058,7 +1143,6 @@ const styles = {
     borderRadius: 999,
     paddingVertical: 10,
     paddingHorizontal: 16,
-    marginBottom: 18,
   },
   backButtonText: {
     color: "#fff",
@@ -1235,35 +1319,51 @@ const styles = {
   },
   chatMessage: {
     paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#2a2a2a",
+    paddingHorizontal: 10,
+    borderRadius: 16,
+    marginBottom: 8,
+    backgroundColor: "#242424",
+    borderWidth: 1,
+    borderColor: "#303036",
   },
   myChatMessage: {
     backgroundColor: "#1a1a1a",
-    borderRadius: 14,
-    paddingHorizontal: 10,
+    borderColor: "#3a3a3f",
+  },
+  groupedChatMessage: {
+    marginTop: -4,
+    paddingTop: 8,
+  },
+  chatMessageGroupedWithNext: {
+    marginBottom: 4,
   },
   chatHeaderRow: {
     flexDirection: "row" as const,
     alignItems: "center" as const,
+    justifyContent: "space-between" as const,
     marginBottom: 4,
+    gap: 8,
   },
   chatName: {
     color: "#fff",
     fontSize: 15,
-    fontWeight: "700" as const,
-    marginRight: 8,
+    fontWeight: "800" as const,
+    flexShrink: 1,
   },
   chatTime: {
-    color: "#777",
-    fontSize: 12,
+    color: "#888",
+    fontSize: 11,
+    fontWeight: "700" as const,
   },
   chatText: {
-    color: "#ddd",
+    color: "#e5e5e5",
     fontSize: 16,
     lineHeight: 22,
     paddingLeft: 2,
     marginTop: 4,
+  },
+  groupedChatText: {
+    marginTop: 0,
   },
   chatMedia: {
     width: "100%" as const,

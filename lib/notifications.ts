@@ -241,7 +241,7 @@ export async function sendFireChatNotification(
     title: `${senderName} posted in ${eventTitle}`,
     body: message,
     data: {
-      screen: "home",
+      screen: "fire-details",
       eventId,
     },
   }));
@@ -307,7 +307,7 @@ export async function sendRSVPNotificationToAttendees(
     title: notificationTitle,
     body: "",
     data: {
-      screen: "home",
+      screen: "fire-details",
       eventId,
     },
   }));
