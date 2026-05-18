@@ -47,6 +47,7 @@ export default function FireDetailsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [lastSeenChatAt, setLastSeenChatAt] = useState<string | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [countdownText, setCountdownText] = useState("");
   const [weather, setWeather] = useState<any>(null);
@@ -101,19 +102,29 @@ export default function FireDetailsScreen() {
       loadName();
       loadFireDetails();
       loadApprovedGuests();
-
-      if (event?.id) {
-        markFireChatAsSeen(event.id);
-      }
-    }, [eventId, event?.id, savedFirstName, savedLastName])
+    }, [eventId])
   );
 
   useEffect(() => {
-    if (event?.id) {
+    if (event?.id && savedFirstName && savedLastName) {
       loadChatMessages();
-      markFireChatAsSeen(event.id);
     }
   }, [event?.id, savedFirstName, savedLastName]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (event?.id && savedFirstName && savedLastName) {
+        loadChatMessages();
+      }
+
+      return () => {
+        if (event?.id && savedFirstName && savedLastName) {
+          markFireChatAsSeen(event.id);
+          setLastSeenChatAt(null);
+        }
+      };
+    }, [event?.id, savedFirstName, savedLastName])
+  );
 
   useEffect(() => {
     if (!event?.rsvps || !savedFirstName || !savedLastName) return;
@@ -142,8 +153,6 @@ export default function FireDetailsScreen() {
       (payload) => {
         const newMessage = payload.new;
 
-        markFireChatAsSeen(event.id);
-
         setChatMessages((currentMessages: any[]) => {
           const alreadyExists = currentMessages.some(
             (message) => message.id === newMessage.id
@@ -153,6 +162,8 @@ export default function FireDetailsScreen() {
 
           return [...currentMessages, newMessage];
         });
+
+        markFireChatAsSeen(event.id);
       }
     );
 
@@ -297,9 +308,13 @@ export default function FireDetailsScreen() {
   }
 
   async function markFireChatAsSeen(fireId: string) {
-    if (!fireId || !savedFirstName || !savedLastName) return;
+    if (!fireId || !savedFirstName || !savedLastName) return null;
 
-    await AsyncStorage.setItem(getChatSeenKey(fireId), new Date().toISOString());
+    const seenAt = new Date().toISOString();
+
+    await AsyncStorage.setItem(getChatSeenKey(fireId), seenAt);
+
+    return seenAt;
   }
 
   async function loadApprovedGuests() {
@@ -352,7 +367,10 @@ export default function FireDetailsScreen() {
   }
 
   async function loadChatMessages() {
-    if (!event?.id) return;
+    if (!event?.id || !savedFirstName || !savedLastName) return;
+
+    const previousLastSeen = await AsyncStorage.getItem(getChatSeenKey(event.id));
+    setLastSeenChatAt(previousLastSeen);
 
     const { data, error } = await supabase
       .from("fire_chat")
@@ -366,6 +384,8 @@ export default function FireDetailsScreen() {
     }
 
     setChatMessages(data ?? []);
+
+    await markFireChatAsSeen(event.id);
   }
 
   async function insertChatMessage({
@@ -640,9 +660,8 @@ export default function FireDetailsScreen() {
       await loadFireDetails();
       await loadApprovedGuests();
 
-      if (event?.id) {
+      if (event?.id && savedFirstName && savedLastName) {
         await loadChatMessages();
-        await markFireChatAsSeen(event.id);
       }
     } finally {
       setRefreshing(false);
@@ -672,7 +691,7 @@ export default function FireDetailsScreen() {
         <Image
           source={{ uri: chat.media_url }}
           style={styles.chatMedia}
-          resizeMode="cover"
+          resizeMode="contain"
         />
         {chat.media_source === "giphy" ? (
           <Text style={styles.giphyLabel}>via GIF</Text>
@@ -849,34 +868,53 @@ export default function FireDetailsScreen() {
                 </Text>
               </View>
             ) : (
-              chatMessages.map((chat: any) => {
+              chatMessages.map((chat: any, index: number) => {
                 const isMyMessage =
                   chat.first_name === savedFirstName &&
                   chat.last_name === savedLastName;
 
+                const shouldShowUnreadSeparator =
+                  !!lastSeenChatAt &&
+                  new Date(chat.created_at).getTime() >
+                    new Date(lastSeenChatAt).getTime() &&
+                  (index === 0 ||
+                    new Date(chatMessages[index - 1].created_at).getTime() <=
+                      new Date(lastSeenChatAt).getTime());
+
                 return (
-                  <View
-                    key={chat.id}
-                    style={[
-                      styles.chatMessage,
-                      isMyMessage && styles.myChatMessage,
-                    ]}
-                  >
-                    <View style={styles.chatHeaderRow}>
-                      <Text style={styles.chatName}>
-                        {chat.first_name} {chat.last_name}
-                      </Text>
-
-                      <Text style={styles.chatTime}>
-                        {formatChatTime(chat.created_at)}
-                      </Text>
-                    </View>
-
-                    {renderChatMedia(chat)}
-
-                    {chat.message ? (
-                      <Text style={styles.chatText}>{chat.message}</Text>
+                  <View key={chat.id}>
+                    {shouldShowUnreadSeparator ? (
+                      <View style={styles.unreadSeparator}>
+                        <View style={styles.unreadSeparatorLine} />
+                        <Text style={styles.unreadSeparatorText}>
+                          New Messages
+                        </Text>
+                        <View style={styles.unreadSeparatorLine} />
+                      </View>
                     ) : null}
+
+                    <View
+                      style={[
+                        styles.chatMessage,
+                        isMyMessage && styles.myChatMessage,
+                      ]}
+                    >
+                      <View style={styles.chatHeaderRow}>
+                        <Text style={styles.chatName}>
+                          {chat.first_name} {chat.last_name}
+                        </Text>
+
+                        <Text style={styles.chatTime}>
+                          {formatChatTime(chat.created_at)}
+                        </Text>
+                      </View>
+
+                      {renderChatMedia(chat)}
+
+                      {chat.message ? (
+                        <Text style={styles.chatText}>{chat.message}</Text>
+                      ) : null}
+                    </View>
                   </View>
                 );
               })
@@ -1229,7 +1267,9 @@ const styles = {
   },
   chatMedia: {
     width: "100%" as const,
+    maxWidth: 360,
     height: 220,
+    alignSelf: "center" as const,
     borderRadius: 18,
     backgroundColor: "#111",
     marginTop: 6,
@@ -1241,6 +1281,25 @@ const styles = {
     fontWeight: "800" as const,
     marginBottom: 4,
     textAlign: "right" as const,
+  },
+  unreadSeparator: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    marginVertical: 14,
+  },
+  unreadSeparatorLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "#f97316",
+    opacity: 0.7,
+  },
+  unreadSeparatorText: {
+    color: "#f97316",
+    fontSize: 12,
+    fontWeight: "900" as const,
+    marginHorizontal: 10,
+    textTransform: "uppercase" as const,
+    letterSpacing: 1,
   },
   chatInput: {
     backgroundColor: "#121212",

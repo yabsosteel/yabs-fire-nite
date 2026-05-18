@@ -42,6 +42,7 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [hasUnreadChat, setHasUnreadChat] = useState(false);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [latestChatCreatedAt, setLatestChatCreatedAt] = useState<string | null>(
     null,
   );
@@ -176,14 +177,15 @@ export default function HomeScreen() {
         return;
       }
 
-      const forecast = await loadFireWeather(event.event_date, event.event_time);
+      const forecast = await loadFireWeather(
+        event.event_date,
+        event.event_time,
+      );
       setWeather(forecast);
     }
 
     loadWeatherForFire();
   }, [event?.event_date, event?.event_time]);
-
-
 
   useEffect(() => {
     const channel = supabase
@@ -238,8 +240,19 @@ export default function HomeScreen() {
       loadAnnouncements();
       loadApprovedGuests();
 
-      if (event?.id) {
-        loadUnreadChat(event.id);
+      const activeEventId =
+        eventIdRef.current || (event?.id ? String(event.id) : null);
+
+      if (activeEventId) {
+        loadUnreadChat(activeEventId);
+
+        setTimeout(() => {
+          loadUnreadChat(activeEventId);
+        }, 300);
+
+        setTimeout(() => {
+          loadUnreadChat(activeEventId);
+        }, 1000);
       }
     }, [event?.id, savedFirstName, savedLastName]),
   );
@@ -251,6 +264,12 @@ export default function HomeScreen() {
         if (nextAppState === "active") {
           loadAnnouncements();
           loadEvent();
+
+          const activeEventId = eventIdRef.current;
+
+          if (activeEventId) {
+            loadUnreadChat(activeEventId);
+          }
         }
       },
     );
@@ -288,6 +307,12 @@ export default function HomeScreen() {
       (nextAppState) => {
         if (nextAppState === "active") {
           loadEvent();
+
+          const activeEventId = eventIdRef.current;
+
+          if (activeEventId) {
+            loadUnreadChat(activeEventId);
+          }
         }
       },
     );
@@ -299,11 +324,14 @@ export default function HomeScreen() {
 
   useEffect(() => {
     const receivedSubscription = Notifications.addNotificationReceivedListener(
-      () => {
+      (notification) => {
+        const data = notification.request.content.data;
+        const notificationEventId = data?.eventId ? String(data.eventId) : null;
         const activeEventId = eventIdRef.current;
+        const fireEventId = notificationEventId || activeEventId;
 
-        if (activeEventId) {
-          loadUnreadChat(activeEventId);
+        if (fireEventId) {
+          loadUnreadChat(fireEventId);
         }
       },
     );
@@ -311,11 +339,12 @@ export default function HomeScreen() {
     const responseSubscription =
       Notifications.addNotificationResponseReceivedListener((response) => {
         const data = response.notification.request.content.data;
-
+        const notificationEventId = data?.eventId ? String(data.eventId) : null;
         const activeEventId = eventIdRef.current;
+        const fireEventId = notificationEventId || activeEventId;
 
-        if (activeEventId) {
-          loadUnreadChat(activeEventId);
+        if (fireEventId) {
+          loadUnreadChat(fireEventId);
         }
 
         if (data?.screen === "home") {
@@ -327,7 +356,7 @@ export default function HomeScreen() {
       receivedSubscription.remove();
       responseSubscription.remove();
     };
-  }, [router]);
+  }, [router, savedFirstName, savedLastName]);
 
   useEffect(() => {
     if (!event?.id || !savedFirstName || !savedLastName) return;
@@ -382,42 +411,42 @@ export default function HomeScreen() {
       .from("fire_chat")
       .select("created_at, first_name, last_name")
       .eq("event_id", fireEventId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .order("created_at", { ascending: false });
 
     if (error) {
       console.log("Error loading unread chat status:", error.message);
+      setHasUnreadChat(false);
+      setUnreadChatCount(0);
       return;
     }
 
-    if (!data?.created_at) {
+    if (!data || data.length === 0) {
       setLatestChatCreatedAt(null);
       setHasUnreadChat(false);
+      setUnreadChatCount(0);
       return;
     }
 
-    const latestFirstName = (data.first_name || "").trim().toLowerCase();
-    const latestLastName = (data.last_name || "").trim().toLowerCase();
-    const latestMessageIsMine =
-      latestFirstName === myFirstName && latestLastName === myLastName;
-
-    setLatestChatCreatedAt(data.created_at);
-
-    if (latestMessageIsMine) {
-      await AsyncStorage.setItem(getChatSeenKey(fireEventId), data.created_at);
-      setHasUnreadChat(false);
-      return;
-    }
+    const newestMessage = data[0];
+    setLatestChatCreatedAt(newestMessage.created_at);
 
     const lastSeen = await AsyncStorage.getItem(getChatSeenKey(fireEventId));
 
-    if (!lastSeen) {
-      setHasUnreadChat(true);
-      return;
-    }
+    const unreadMessages = data.filter((message: any) => {
+      const messageFirstName = (message.first_name || "").trim().toLowerCase();
+      const messageLastName = (message.last_name || "").trim().toLowerCase();
+      const messageIsMine =
+        messageFirstName === myFirstName && messageLastName === myLastName;
 
-    setHasUnreadChat(new Date(data.created_at) > new Date(lastSeen));
+      if (messageIsMine) return false;
+
+      if (!lastSeen) return true;
+
+      return new Date(message.created_at) > new Date(lastSeen);
+    });
+
+    setUnreadChatCount(unreadMessages.length);
+    setHasUnreadChat(unreadMessages.length > 0);
   }
 
   async function setupNotifications() {
@@ -648,49 +677,15 @@ export default function HomeScreen() {
 
     setSelectedEventId(nextFire.id);
     setEvent(nextFire);
+    eventIdRef.current = String(nextFire.id);
     setStatus(nextFire.title || "Next Fire");
     setMessage(nextFire.message || "");
     setLoading(false);
-  }
 
-
-  async function loadUnreadChatStatus(eventId: string) {
-    if (!savedFirstName || !savedLastName) return;
-
-    const { data: latestChat } = await supabase
-      .from("fire_chat")
-      .select("created_at")
-      .eq("event_id", eventId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (!latestChat?.created_at) {
-      setHasUnreadChat(false);
-      setLatestChatCreatedAt(null);
-      return;
+    if (savedFirstName && savedLastName) {
+      await loadUnreadChat(String(nextFire.id));
     }
-
-    setLatestChatCreatedAt(latestChat.created_at);
-
-    const { data: readData } = await supabase
-      .from("fire_chat_reads")
-      .select("last_seen_at")
-      .eq("event_id", eventId)
-      .eq("first_name", savedFirstName)
-      .eq("last_name", savedLastName)
-      .maybeSingle();
-
-    if (!readData?.last_seen_at) {
-      setHasUnreadChat(true);
-      return;
-    }
-
-    setHasUnreadChat(
-      new Date(latestChat.created_at) > new Date(readData.last_seen_at)
-    );
   }
-
 
   async function loadName() {
     const storedFirstName = await AsyncStorage.getItem("first_name");
@@ -773,11 +768,8 @@ export default function HomeScreen() {
   async function openFireDetails() {
     if (!event?.id) return;
 
-    await AsyncStorage.setItem(
-      getChatSeenKey(event.id),
-      latestChatCreatedAt || new Date().toISOString(),
-    );
     setHasUnreadChat(false);
+    setUnreadChatCount(0);
 
     router.push({
       pathname: "/fire-details",
@@ -860,14 +852,14 @@ export default function HomeScreen() {
               )}
 
               {event && countdownText ? (
-                <Text style={styles.countdownText}>
-                  🔥 {countdownText}
-                </Text>
+                <Text style={styles.countdownText}>🔥 {countdownText}</Text>
               ) : null}
 
               {event && weather ? (
                 <Text style={styles.weatherText}>
-                  {weather.icon || "🌤️"} {Math.round(weather.temperature)}°F • {weather.rainChance ?? 0}% rain • {Math.round(weather.windSpeed)} mph wind
+                  {weather.icon || "🌤️"} {Math.round(weather.temperature)}°F •{" "}
+                  {weather.rainChance ?? 0}% rain •{" "}
+                  {Math.round(weather.windSpeed)} mph wind
                 </Text>
               ) : null}
 
@@ -907,8 +899,11 @@ export default function HomeScreen() {
 
                   {hasUnreadChat && (
                     <View style={styles.unreadChatPill}>
-                      <Text style={styles.unreadChatPillText}>
-                        New chat messages
+                      <Text style={styles.unreadChatPillTitle}>New Chat</Text>
+                      <Text style={styles.unreadChatPillCount}>
+                        {unreadChatCount === 1
+                          ? "1 new message"
+                          : `${unreadChatCount} New Messages`}
                       </Text>
                     </View>
                   )}
@@ -1198,14 +1193,24 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     marginTop: 14,
     backgroundColor: "#ef4444",
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingVertical: 7,
+    paddingHorizontal: 30,
     borderRadius: 999,
+    alignItems: "center",
   },
-  unreadChatPillText: {
+  unreadChatPillTitle: {
     color: "#fff",
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "900",
+    letterSpacing: 0.7,
+    textAlign: "center",
+  },
+  unreadChatPillCount: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "900",
+    textAlign: "center",
+    marginTop: 2,
   },
   mainCard: {
     width: "100%",
@@ -1363,5 +1368,4 @@ const styles = StyleSheet.create({
     fontWeight: "800" as const,
     letterSpacing: 0.5,
   },
-
 });
