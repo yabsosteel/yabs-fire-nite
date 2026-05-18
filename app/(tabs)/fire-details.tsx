@@ -13,7 +13,6 @@ import {
 } from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import Toast from "react-native-toast-message";
-import * as FileSystem from "expo-file-system";
 import { supabase } from "../../lib/supabase";
 import { loadFireWeather } from "../../lib/weather";
 import { GIPHY_API_KEY } from "../../lib/giphy";
@@ -39,25 +38,6 @@ type GiphyResult = {
   };
 };
 
-function decodeBase64ToUint8Array(base64: string) {
-  const chars =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
-  let output = "";
-
-  for (
-    let bc = 0, bs = 0, buffer = 0, index = 0;
-    (buffer = chars.indexOf(base64.charAt(index++))) !== -1;
-
-  ) {
-    bs = bc % 4 ? bs * 64 + buffer : buffer;
-    if (bc++ % 4) {
-      output += String.fromCharCode(255 & (bs >> ((-2 * bc) & 6)));
-    }
-  }
-
-  return Uint8Array.from(output, (character) => character.charCodeAt(0));
-}
-
 export default function FireDetailsScreen() {
   const router = useRouter();
   const { eventId } = useLocalSearchParams();
@@ -82,7 +62,6 @@ export default function FireDetailsScreen() {
   const [giphySearch, setGiphySearch] = useState("");
   const [giphyResults, setGiphyResults] = useState<GiphyResult[]>([]);
   const [isLoadingGiphy, setIsLoadingGiphy] = useState(false);
-  const [firePhotos, setFirePhotos] = useState<any[]>([]);
 
   const goingList = dedupePeople(
     event?.rsvps?.filter((r: any) => r.response_status === "going") || []
@@ -116,7 +95,6 @@ export default function FireDetailsScreen() {
     loadName();
     loadFireDetails();
     loadApprovedGuests();
-    loadFirePhotos();
   }, [eventId]);
 
   useFocusEffect(
@@ -124,8 +102,7 @@ export default function FireDetailsScreen() {
       loadName();
       loadFireDetails();
       loadApprovedGuests();
-      loadFirePhotos();
-    }, [eventId])
+      }, [eventId])
   );
 
   useEffect(() => {
@@ -197,40 +174,6 @@ export default function FireDetailsScreen() {
     };
   }, [event?.id, savedFirstName, savedLastName]);
 
-  useEffect(() => {
-    if (!event?.id) return;
-
-    const channel = supabase.channel(`fire-photos-details-${event.id}`);
-
-    channel.on(
-      "postgres_changes",
-      {
-        event: "INSERT",
-        schema: "public",
-        table: "fire_photos",
-        filter: `event_id=eq.${event.id}`,
-      },
-      (payload) => {
-        const newPhoto = payload.new;
-
-        setFirePhotos((currentPhotos: any[]) => {
-          const alreadyExists = currentPhotos.some(
-            (photo) => photo.id === newPhoto.id
-          );
-
-          if (alreadyExists) return currentPhotos;
-
-          return [newPhoto, ...currentPhotos];
-        });
-      }
-    );
-
-    channel.subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [event?.id]);
 
   useEffect(() => {
     function updateCountdown() {
@@ -422,25 +365,6 @@ export default function FireDetailsScreen() {
 
     setEvent(data);
     setLoading(false);
-  }
-
-  async function loadFirePhotos() {
-    if (!eventId) return;
-
-    const fireId = Array.isArray(eventId) ? eventId[0] : eventId;
-
-    const { data, error } = await supabase
-      .from("fire_photos")
-      .select("*")
-      .eq("event_id", fireId)
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      showErrorToast(error.message);
-      return;
-    }
-
-    setFirePhotos(data ?? []);
   }
 
   async function loadChatMessages() {
@@ -769,8 +693,7 @@ export default function FireDetailsScreen() {
       await loadName();
       await loadFireDetails();
       await loadApprovedGuests();
-      await loadFirePhotos();
-
+      
       if (event?.id && savedFirstName && savedLastName) {
         await loadChatMessages();
       }
@@ -956,45 +879,9 @@ export default function FireDetailsScreen() {
           </Pressable>
         </View>
 
-        <View style={styles.photosCard}>
-          <View style={styles.photoHeaderRow}>
-            <View>
-              <Text style={styles.sectionTitle}>Fire Photos</Text>
-              <Text style={styles.chatHint}>Photos will show here once uploaded</Text>
-            </View>
-          </View>
-
-          {firePhotos.length === 0 ? (
-            <View style={styles.emptyStateCard}>
-              <Text style={styles.emptyStateTitle}>No photos yet</Text>
-              <Text style={styles.emptyStateText}>
-                Photo uploads are temporarily disabled while we stabilize the app.
-              </Text>
-            </View>
-          ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              {firePhotos.map((photo: any) => (
-                <View key={photo.id} style={styles.firePhotoItem}>
-                  <Image
-                    source={{ uri: photo.image_url }}
-                    style={styles.firePhotoImage}
-                    resizeMode="cover"
-                  />
-
-                  {photo.uploaded_by_name ? (
-                    <Text style={styles.firePhotoName}>
-                      {photo.uploaded_by_name}
-                    </Text>
-                  ) : null}
-                </View>
-              ))}
-            </ScrollView>
-          )}
-        </View>
-
         <View style={styles.chatCard}>
           <Text style={styles.sectionTitle}>Fire Chat</Text>
-          <Text style={styles.chatHint}>Messages, photos, and GIFs for this fire only</Text>
+          <Text style={styles.chatHint}>Messages and GIFs for this fire only</Text>
 
           <ScrollView
             ref={chatScrollRef}
