@@ -819,6 +819,19 @@ export default function HomeScreen() {
     });
   }
 
+  const fireDateTime = event
+    ? new Date(`${event.event_date}T${event.event_time}`)
+    : null;
+
+  const now = new Date();
+
+  const fireEndsAt = fireDateTime
+    ? new Date(fireDateTime.getTime() + 4 * 60 * 60 * 1000)
+    : null;
+
+  const isFireLive =
+    !!fireDateTime && !!fireEndsAt && now >= fireDateTime && now <= fireEndsAt;
+
   return (
     <ScrollView
       contentContainerStyle={styles.screen}
@@ -842,6 +855,15 @@ export default function HomeScreen() {
               : "No fire scheduled right now."}
         </Text>
       </View>
+
+      {isFireLive && (
+        <Pressable onPress={openFireDetails} style={styles.liveFireBanner}>
+          <Text style={styles.liveFireBannerText}>🔥 Fire is happening now</Text>
+          <Text style={styles.liveFireBannerSubtext}>
+            Tap to open the fire details and jump into chat.
+          </Text>
+        </Pressable>
+      )}
 
       <Pressable
         disabled={!event || showHomeLoadingCard}
@@ -1421,6 +1443,35 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 15,
     lineHeight: 21,
+  },
+  liveFireBanner: {
+    width: "100%",
+    backgroundColor: "#2a1408",
+    borderWidth: 1,
+    borderColor: "#f97316",
+    borderRadius: 20,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    marginBottom: 16,
+    shadowColor: "#f97316",
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    elevation: 6,
+  },
+  liveFireBannerText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "900",
+    marginBottom: 5,
+  },
+  liveFireBannerSubtext: {
+    color: "#d4d4d4",
+    fontSize: 14,
+    lineHeight: 20,
   },
   unreadBadge: {
     backgroundColor: "#ef4444",
